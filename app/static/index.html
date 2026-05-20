@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Dual-Stream Safety Hub</title>
+  <link rel="stylesheet" href="/static/styles.css?v=20260508-ui-trim" />
+</head>
+<body>
+  <div class="app-shell">
+    <main class="workspace">
+      <header class="hero-bar">
+        <div>
+          <p class="eyebrow">Driver Safety Monitoring System</p>
+          <div class="hero-title-row">
+            <h2 class="page-title">Dual-Stream Safety Hub</h2>
+            <span class="hero-session">Vehicle ID: DS-9042</span>
+          </div>
+          <p class="hero-copy">Inside-cabin attention analysis fused with outside-road vehicle monitoring.</p>
+        </div>
+
+        <div class="hero-actions">
+          <nav class="page-nav" aria-label="Page navigation">
+            <a class="nav-link active" href="/">Dashboard</a>
+          </nav>
+          <div class="hero-status">
+            <span id="riskLevel" class="pill low">Low</span>
+            <strong id="riskScore">0</strong>
+            <span class="optimize-chip">AI OPTIMIZING</span>
+          </div>
+        </div>
+      </header>
+
+      <section class="dashboard-grid">
+        <div class="main-column">
+          <section id="liveArea" class="video-grid">
+            <article class="panel video-panel">
+              <div class="panel-head">
+                <div>
+                  <span class="panel-label">Cam 01</span>
+                  <h3>Road View</h3>
+                </div>
+                <div class="stream-meta">
+                  <span id="outsideStreamBadge" class="stream-badge live">Live</span>
+                  <span id="outsideHealth" class="stream-health online">
+                    <span class="health-dot"></span>
+                    <span class="health-label">Online</span>
+                  </span>
+                </div>
+              </div>
+              <img class="stream-frame" src="/stream/outside" alt="Outside road stream" />
+              <p class="frame-note">Vehicle tracking, traffic density, and close-range risk estimation.</p>
+            </article>
+
+            <article class="panel video-panel">
+              <div class="panel-head">
+                <div>
+                  <span class="panel-label">Cam 02</span>
+                  <h3>Driver View</h3>
+                </div>
+                <div class="stream-meta">
+                  <span id="insideStreamBadge" class="stream-badge live">Live</span>
+                  <span id="insideHealth" class="stream-health online">
+                    <span class="health-dot"></span>
+                    <span class="health-label">Online</span>
+                  </span>
+                </div>
+              </div>
+              <img class="stream-frame" src="/stream/inside" alt="Inside cabin stream" />
+              <p class="frame-note">Face landmarks, drowsiness cues, yawning, and attention tracking.</p>
+            </article>
+          </section>
+
+          <section class="insight-grid">
+            <article class="panel metric-card">
+              <span class="panel-label">Driver State</span>
+              <strong id="driverStatus">Waiting</strong>
+              <small id="driverNote">No frame yet</small>
+            </article>
+
+            <article class="panel metric-card">
+              <span class="panel-label">Mode</span>
+              <strong id="modeValue">Live</strong>
+              <small id="modeNote">Camera sources active</small>
+            </article>
+
+            <article class="panel metric-card">
+              <span class="panel-label">EAR</span>
+              <strong id="earValue">0.00</strong>
+              <small>Eye aspect ratio</small>
+            </article>
+
+            <article class="panel metric-card">
+              <span class="panel-label">Vehicles Now</span>
+              <strong id="vehicleCount">0</strong>
+              <small id="trafficLevel">Current road count</small>
+            </article>
+
+            <article class="panel metric-card">
+              <span class="panel-label">FPS</span>
+              <strong id="fpsValue">0 / 0</strong>
+              <small>Inside / outside inference</small>
+            </article>
+
+            <article class="panel reasoning-panel">
+              <div class="section-head">
+                <span class="panel-label">AI Reasoning</span>
+                <span class="score-tag">Fusion Active</span>
+              </div>
+              <ul id="reasonsList" class="reason-list"></ul>
+            </article>
+          </section>
+        </div>
+
+        <aside class="side-rail">
+          <article id="controlPanel" class="panel control-panel">
+            <div class="section-head">
+              <div>
+                <span class="panel-label">Input Control</span>
+                <h3>Stream Manager</h3>
+              </div>
+              <span id="configStatus" class="status-chip">Ready</span>
+            </div>
+
+            <div class="mode-switch">
+              <button id="liveModeBtn" class="mode-btn active" type="button">Live</button>
+              <button id="recordedModeBtn" class="mode-btn" type="button">Recorded</button>
+            </div>
+
+            <div class="source-stack">
+              <label class="field">
+                <span>Inside Source</span>
+                <input id="insideSourceInput" type="text" placeholder="0 or RTSP URL or video path" />
+              </label>
+              <label class="field">
+                <span>Outside Source</span>
+                <input id="outsideSourceInput" type="text" placeholder="1 or RTSP URL or video path" />
+              </label>
+            </div>
+
+            <div class="action-group">
+              <button id="startBtn" class="start-btn" type="button">Start</button>
+              <button id="stopBtn" class="stop-btn" type="button">Stop</button>
+              <button id="applyConfigBtn" class="apply-btn" type="button">Apply</button>
+            </div>
+
+            <div id="uploadGrid" class="upload-stack hidden">
+              <div class="upload-item">
+                <input id="insideUploadInput" type="file" accept="video/*" />
+                <button id="uploadInsideBtn" class="upload-btn" type="button">Upload Inside</button>
+              </div>
+              <div class="upload-item">
+                <input id="outsideUploadInput" type="file" accept="video/*" />
+                <button id="uploadOutsideBtn" class="upload-btn" type="button">Upload Outside</button>
+              </div>
+            </div>
+          </article>
+
+          <section id="playbackSection" class="playback-section hidden">
+            <article class="panel playback-card">
+              <div class="section-head">
+                <div>
+                  <span class="panel-label">Recorded Playback</span>
+                  <h3>Auto Classification Progress</h3>
+                </div>
+                <span class="score-tag">Looping</span>
+              </div>
+
+              <div class="playback-grid">
+                <div class="playback-item">
+                  <div class="playback-meta">
+                    <span id="insideFileName" class="playback-name">No inside video</span>
+                    <span id="insideProgressLabel" class="playback-percent">0%</span>
+                  </div>
+                  <div class="progress-track">
+                    <div id="insideProgressBar" class="progress-fill"></div>
+                  </div>
+                </div>
+
+                <div class="playback-item">
+                  <div class="playback-meta">
+                    <span id="outsideFileName" class="playback-name">No outside video</span>
+                    <span id="outsideProgressLabel" class="playback-percent">0%</span>
+                  </div>
+                  <div class="progress-track">
+                    <div id="outsideProgressBar" class="progress-fill"></div>
+                  </div>
+                </div>
+              </div>
+            </article>
+          </section>
+
+        </aside>
+      </section>
+    </main>
+  </div>
+
+  <script src="/static/app.js?v=20260508-ui-trim"></script>
+</body>
+</html>

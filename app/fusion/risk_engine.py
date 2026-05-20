@@ -1,0 +1,118 @@
+from __future__ import annotations
+
+from collections import deque
+
+from app.config import Settings
+from app.core.state import FusedState, InsideState, OutsideState
+
+
+class RiskEngine:
+    """Combines inside and outside observations into a preliminary Phase 1 risk level."""
+
+    def __init__(self, settings: Settings) -> None:
+        self.settings = settings
+        self._score_history: deque[int] = deque(maxlen=max(settings.risk_smoothing_window, 1))
+
+    def reset(self) -> None:
+        self._score_history.clear()
+
+    @staticmethod
+    def _level_from_score(score: int) -> str:
+        if score >= 85:
+            return "Critical"
+        if score >= 60:
+            return "High"
+        if score >= 30:
+            return "Medium"
+        return "Low"
+
+    def evaluate(self, inside: InsideState, outside: OutsideState) -> FusedState:
+        score = 0
+        reasons: list[str] = []
+
+        if not inside.available:
+            reasons.append("Inside stream unavailable")
+        elif inside.status == "Fatigue Risk":
+            score += 70
+            reasons.append(
+                f"Fatigue risk: EAR {inside.ear:.2f}, MAR {inside.mar:.2f}, attention {inside.attention_score:.2f}"
+            )
+        elif inside.status == "Drowsy":
+            score += 52
+            reasons.append(f"Low EAR detected ({inside.ear:.2f})")
+        elif inside.status == "Distracted":
+            score += 34
+            reasons.append(f"Driver attention dropped ({inside.attention_score:.2f})")
+        elif inside.status == "Yawning":
+            score += 18
+            reasons.append(f"Sustained yawn detected ({inside.mar:.2f})")
+        elif inside.status == "No Face":
+            score += 12
+            reasons.append("Driver face not visible")
+        elif inside.status == "Monitoring":
+            score += 5
+            reasons.append("Driver face visible but confidence is low")
+        else:
+            reasons.append(
+                f"Driver appears awake (EAR {inside.ear:.2f}, attention {inside.attention_score:.2f})"
+            )
+
+        if not outside.available:
+            reasons.append("Outside stream unavailable")
+        elif outside.close_vehicle_count >= 2:
+            score += 36
+            reasons.append(f"{outside.close_vehicle_count} close vehicles detected ahead")
+        elif outside.close_vehicle:
+            score += 24
+            reasons.append("Vehicle detected in close front zone")
+        elif outside.vehicle_count >= 6:
+            score += 18
+            reasons.append(f"Dense surrounding traffic ({outside.vehicle_count} visible)")
+        elif outside.vehicle_count > 0:
+            score += 8
+            reasons.append(f"Vehicles detected around ego view ({outside.vehicle_count})")
+        else:
+            reasons.append("Outside road appears clear")
+
+        if outside.proximity_score >= 0.09:
+            score += 12
+            reasons.append(f"Large nearby vehicle footprint ({outside.proximity_score:.2f})")
+        elif outside.proximity_score >= 0.05:
+            score += 6
+            reasons.append(f"Nearby vehicle footprint rising ({outside.proximity_score:.2f})")
+
+        if inside.status in {"Drowsy", "Fatigue Risk"} and outside.close_vehicle:
+            score += 25
+            reasons.append("Fatigued driver with close front vehicle")
+        elif inside.status == "Distracted" and outside.close_vehicle:
+            score += 18
+            reasons.append("Distracted driver with close front vehicle")
+        elif inside.status == "Yawning" and outside.vehicle_count >= 4:
+            score += 10
+            reasons.append("Yawning driver in active traffic")
+        elif inside.status == "Distracted" and outside.vehicle_count >= 4:
+            score += 10
+            reasons.append("Distracted driver in active traffic")
+        elif inside.status == "No Face" and outside.close_vehicle:
+            score += 12
+            reasons.append("Face missing while front vehicle is close")
+
+        raw_score = min(score, 100)
+        raw_level = self._level_from_score(raw_score)
+        self._score_history.append(raw_score)
+
+        smoothed_score = int(round(sum(self._score_history) / len(self._score_history)))
+        high_hits = sum(1 for value in self._score_history if value >= 60)
+        critical_hits = sum(1 for value in self._score_history if value >= 85)
+
+        level = self._level_from_score(smoothed_score)
+        if raw_level == "Critical" and critical_hits < self.settings.critical_persistence_frames:
+            level = "High"
+            reasons.append("Critical risk held until it persists across frames")
+        elif raw_level in {"High", "Critical"} and high_hits < self.settings.high_persistence_frames:
+            level = "Medium"
+            reasons.append("Elevated risk held until it stabilizes across frames")
+        elif smoothed_score != raw_score:
+            reasons.append(f"Temporal smoothing applied ({raw_score} -> {smoothed_score})")
+
+        return FusedState(level=level, score=smoothed_score, reasons=reasons)
