@@ -18,10 +18,10 @@ This project implements Phase 1 of a real-time dangerous driving detection syste
 - Stable tracked IDs with current vehicle counting
 - GPU-ready outside model profiles: `speed`, `balanced`, `accuracy`
 - Fused risk levels: `Low`, `Medium`, `High`, `Critical`
-- Event logging with timestamps and snapshots
 - Recorded video upload and automatic playback classification
 - Recorded video file names and playback progress bars
 - Stream status badges with separate health indicators
+- Simplified dashboard for live and recorded monitoring
 
 ## Recommended Environment
 
@@ -29,12 +29,36 @@ This project implements Phase 1 of a real-time dangerous driving detection syste
 - Python 3.11
 - NVIDIA GPU optional but recommended
 
-## Setup
+## Quick Start For Sharing
+
+If you are sharing this project with someone else on Windows, the easiest way is:
+
+1. Install `Python 3.11`
+2. Double-click `start_project.bat`
+
+What this script does automatically:
+
+- creates `.venv` if it does not exist
+- installs or refreshes dependencies from `requirements.txt`
+- creates `.env` from `.env.example` if needed
+- prepares local data folders
+- starts the FastAPI server
+- opens the browser at `http://127.0.0.1:8000`
+
+PowerShell alternative:
+
+```powershell
+.\start_project.ps1
+```
+
+If dependencies change later, the script will reinstall them automatically.
+
+## Manual Setup
 
 1. Create a virtual environment:
 
 ```powershell
-C:\Users\katar\AppData\Local\Programs\Python\Python311\python.exe -m venv .venv
+py -3.11 -m venv .venv
 ```
 
 2. Activate it:
@@ -80,6 +104,14 @@ Copy-Item .env.example .env
 
 ## Run
 
+Recommended:
+
+```powershell
+.\start_project.ps1
+```
+
+Alternative:
+
 ```powershell
 python -m uvicorn app.main:app --reload
 ```
@@ -87,6 +119,12 @@ python -m uvicorn app.main:app --reload
 Open:
 
 - `http://127.0.0.1:8000`
+
+## Sharing Tips
+
+- If the other system has only one camera, use `Recorded` mode for the missing stream.
+- If a teammate does not have a GPU, the project can still run on CPU, but it may be slower.
+- If `start_project.bat` fails immediately, ask them to confirm `Python 3.11` is installed and available through `py -3.11`.
 
 ## Accuracy Note
 
