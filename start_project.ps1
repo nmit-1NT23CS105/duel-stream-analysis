@@ -116,4 +116,4 @@ Write-Host "Open http://127.0.0.1:8000 if the browser does not open automaticall
 Write-Host "Use Recorded mode if the shared system does not have two live cameras available." -ForegroundColor Yellow
 Write-Host ""
 
-& $venvPython -m uvicorn app.main:app --host 127.0.0.1 --port 8000
+& $venvPython -m uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
