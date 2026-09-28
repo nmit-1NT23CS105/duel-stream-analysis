@@ -26,6 +26,7 @@ MOUTH = [78, 81, 13, 308, 311, 14, 82, 87, 312, 317]
 NOSE_TIP = 1
 LEFT_CHEEK = 234
 RIGHT_CHEEK = 454
+CHIN = 152
 PHONE_CLASS_ID = 67
 
 
@@ -48,7 +49,7 @@ class InsideMonitor:
         self._last_phone_box: tuple[int, int, int, int] | None = None
         self._seatbelt_counter = 0
         self._seatbelt_off_counter = 0
-        self._last_seatbelt_detected = True
+        self._last_seatbelt_detected = False
         self._last_seatbelt_line: tuple[int, int, int, int] | None = None
         window = max(settings.inside_smoothing_window, 1)
         self._ear_history: deque[float] = deque(maxlen=window)
@@ -82,7 +83,7 @@ class InsideMonitor:
         self._last_phone_box = None
         self._seatbelt_counter = 0
         self._seatbelt_off_counter = 0
-        self._last_seatbelt_detected = True
+        self._last_seatbelt_detected = False
         self._last_seatbelt_line = None
         self._ear_history.clear()
         self._mar_history.clear()
@@ -247,60 +248,147 @@ class InsideMonitor:
 
         return best_box is not None, best_confidence, best_box
 
+    @staticmethod
+    def _evaluate_line_strap(
+        gray: np.ndarray,
+        p1: tuple[int, int],
+        p2: tuple[int, int],
+        strap_width: int = 16,
+    ) -> tuple[float, float]:
+        x1, y1 = p1
+        x2, y2 = p2
+        dx = x2 - x1
+        dy = y2 - y1
+        length = math.hypot(dx, dy)
+        if length < 35:
+            return 0.0, 0.0
+
+        nx = -dy / length
+        ny = dx / length
+
+        num_samples = int(length / 4)
+        if num_samples < 6:
+            return 0.0, 0.0
+
+        center_vals: list[float] = []
+        side_vals: list[float] = []
+        h, w = gray.shape
+
+        for i in range(num_samples):
+            t = i / max(num_samples - 1, 1)
+            cx = int(x1 + t * dx)
+            cy = int(y1 + t * dy)
+
+            lx = int(cx + nx * strap_width)
+            ly = int(cy + ny * strap_width)
+            rx = int(cx - nx * strap_width)
+            ry = int(cy - ny * strap_width)
+
+            if 0 <= cy < h and 0 <= cx < w and 0 <= ly < h and 0 <= lx < w and 0 <= ry < h and 0 <= rx < w:
+                c = float(gray[cy, cx])
+                s = (float(gray[ly, lx]) + float(gray[ry, rx])) / 2.0
+                center_vals.append(c)
+                side_vals.append(s)
+
+        if len(center_vals) < 6:
+            return 0.0, 0.0
+
+        contrast = float(np.mean(side_vals) - np.mean(center_vals))
+        contrast_ratio = float(np.mean([abs(s - c) >= 12.0 for c, s in zip(center_vals, side_vals)]))
+        return contrast, contrast_ratio
+
     def _detect_seatbelt(
         self,
         frame: np.ndarray,
         face_box: tuple[int, int, int, int],
+        chin_y: int | None = None,
     ) -> tuple[bool, str, tuple[int, int, int, int] | None, tuple[int, int, int, int]]:
         if not self.settings.seatbelt_detection_enabled:
-            return True, "Disabled", None, (0, 0, 0, 0)
+            return False, "Disabled", None, (0, 0, 0, 0)
 
         x1, y1, x2, y2 = face_box
         height, width = frame.shape[:2]
         face_width = max(x2 - x1, 1)
         face_height = max(y2 - y1, 1)
+        face_center_x = (x1 + x2) // 2
+        effective_chin_y = chin_y if chin_y is not None else y2
 
-        torso_top = min(y2 + int(face_height * 0.15), height - 1)
-        torso_bottom = min(y2 + int(face_height * 2.8), height - 1)
-        torso_left = max(0, x1 - int(face_width * 1.0))
-        torso_right = min(width - 1, x2 + int(face_width * 1.0))
+        torso_top = min(effective_chin_y + int(face_height * 0.15), height - 1)
+        torso_bottom = min(effective_chin_y + int(face_height * 2.3), height - 1)
+        torso_left = max(0, face_center_x - int(face_width * 1.05))
+        torso_right = min(width - 1, face_center_x + int(face_width * 1.05))
         torso_box = (torso_left, torso_top, torso_right, torso_bottom)
 
-        if torso_bottom - torso_top < 40 or torso_right - torso_left < 40:
-            return True, "Unknown", None, torso_box
+        rh = torso_bottom - torso_top
+        rw = torso_right - torso_left
+        if rh < 50 or rw < 50:
+            return False, "Unknown", None, torso_box
 
         torso_roi = frame[torso_top:torso_bottom, torso_left:torso_right]
         gray = cv2.cvtColor(torso_roi, cv2.COLOR_BGR2GRAY)
+        blurred = cv2.bilateralFilter(gray, 7, 50, 50)
         clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
-        enhanced = clahe.apply(gray)
+        enhanced = clahe.apply(blurred)
         edges = cv2.Canny(enhanced, 50, 150)
 
+        min_len = max(int(rh * 0.35), 45)
+        max_gap = max(int(rh * 0.12), 15)
         lines = cv2.HoughLinesP(
             edges,
             1,
             np.pi / 180,
-            threshold=38,
-            minLineLength=self.settings.seatbelt_min_line_length,
-            maxLineGap=25,
+            threshold=40,
+            minLineLength=min_len,
+            maxLineGap=max_gap,
         )
 
+        detected_now = False
         best_line = None
-        max_len = 0.0
+        best_candidate_len = 0.0
+
         if lines is not None:
+            candidates = []
+            min_angle = max(self.settings.seatbelt_min_angle, 28.0)
+            max_angle = min(self.settings.seatbelt_max_angle, 68.0)
+            strap_w = max(int(face_width * 0.05), 10)
+
             for line in lines:
                 lx1, ly1, lx2, ly2 = line[0]
                 dx = lx2 - lx1
                 dy = ly2 - ly1
+                length = math.hypot(dx, dy)
                 angle = abs(math.atan2(dy, dx) * 180.0 / math.pi)
-                if self.settings.seatbelt_min_angle <= angle <= self.settings.seatbelt_max_angle:
-                    line_len = math.hypot(dx, dy)
-                    if line_len > max_len:
-                        max_len = line_len
-                        best_line = (lx1 + torso_left, ly1 + torso_top, lx2 + torso_left, ly2 + torso_top)
 
-        detected = best_line is not None and max_len >= self.settings.seatbelt_min_line_length
-        status = "Fastened" if detected else "Unfastened"
-        return detected, status, best_line, torso_box
+                if min_angle <= angle <= max_angle:
+                    top_y = min(ly1, ly2)
+                    bot_y = max(ly1, ly2)
+                    v_span = bot_y - top_y
+                    if v_span >= rh * 0.28 and top_y <= rh * 0.45 and bot_y >= rh * 0.50:
+                        mid_x = (lx1 + lx2) / 2.0
+                        if rw * 0.15 <= mid_x <= rw * 0.85:
+                            gx1, gy1 = lx1 + torso_left, ly1 + torso_top
+                            gx2, gy2 = lx2 + torso_left, ly2 + torso_top
+                            contrast, contrast_ratio = self._evaluate_line_strap(
+                                gray, (lx1, ly1), (lx2, ly2), strap_width=strap_w
+                            )
+                            if contrast_ratio >= 0.40 or abs(contrast) >= 14.0:
+                                candidates.append({
+                                    "len": length,
+                                    "slope": dy / (dx if dx != 0 else 1e-5),
+                                    "contrast": contrast,
+                                    "ratio": contrast_ratio,
+                                    "global_line": (gx1, gy1, gx2, gy2),
+                                })
+
+            for group in ([c for c in candidates if c["slope"] > 0], [c for c in candidates if c["slope"] < 0]):
+                if len(group) >= 2 or (len(group) == 1 and group[0]["len"] >= rh * 0.50):
+                    detected_now = True
+                    group_best = max(group, key=lambda c: c["len"])
+                    best_line = group_best["global_line"]
+                    break
+
+        status = "Fastened" if detected_now else "Unfastened"
+        return detected_now, status, best_line, torso_box
 
     def analyze(self, frame: np.ndarray) -> InsideResult:
         self._frame_index += 1
@@ -322,7 +410,7 @@ class InsideMonitor:
                 phone_confidence=0.0,
                 yawning=False,
                 distracted=False,
-                seatbelt_detected=True,
+                seatbelt_detected=False,
                 seatbelt_status="Unknown",
                 drowsy_frames=0,
                 yawn_frames=0,
@@ -378,6 +466,7 @@ class InsideMonitor:
         ys = [int(pt.y * height) for pt in face_landmarks]
         x1, y1 = max(min(xs), 0), max(min(ys), 0)
         x2, y2 = min(max(xs), width - 1), min(max(ys), height - 1)
+        chin_y = int(face_landmarks[CHIN].y * height)
         face_height = max(y2 - y1, 1)
         face_width_ratio = face_width / max(width, 1)
         face_height_ratio = face_height / max(height, 1)
@@ -451,12 +540,12 @@ class InsideMonitor:
         distracted = self._distraction_counter >= self.settings.distraction_consec_frames
         drowsy = self._drowsy_counter >= self.settings.drowsy_consec_frames
 
-        seatbelt_detected = True
-        seatbelt_status = "Fastened"
+        seatbelt_detected = False
+        seatbelt_status = "Unknown"
         seatbelt_line = None
         torso_box = None
         if reliable_face and self.settings.seatbelt_detection_enabled:
-            sb_detected, sb_status, sb_line, sb_torso = self._detect_seatbelt(frame, (x1, y1, x2, y2))
+            sb_detected, sb_status, sb_line, sb_torso = self._detect_seatbelt(frame, (x1, y1, x2, y2), chin_y=chin_y)
             torso_box = sb_torso
             if sb_detected:
                 self._seatbelt_counter += 1
@@ -475,7 +564,7 @@ class InsideMonitor:
             seatbelt_status = "Fastened" if seatbelt_detected else "Unfastened"
             seatbelt_line = self._last_seatbelt_line if seatbelt_detected else None
         else:
-            seatbelt_detected = True
+            seatbelt_detected = False
             seatbelt_status = "Unknown"
 
         if not reliable_face:
@@ -603,23 +692,33 @@ class InsideMonitor:
             if seatbelt_detected and seatbelt_line is not None:
                 sx1, sy1, sx2, sy2 = seatbelt_line
                 cv2.line(annotated, (sx1, sy1), (sx2, sy2), (0, 255, 128), 3)
+                cv2.putText(
+                    annotated,
+                    "Seatbelt Worn",
+                    (min(sx1, sx2), max(min(sy1, sy2) - 8, 20)),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.65,
+                    (0, 255, 128),
+                    2,
+                )
             elif not seatbelt_detected and torso_box is not None:
                 tx1, ty1, tx2, ty2 = torso_box
                 cv2.rectangle(annotated, (tx1, ty1), (tx2, ty2), (0, 0, 255), 2)
                 cv2.putText(
                     annotated,
-                    "Seatbelt Missing",
-                    (tx1, max(ty1 - 8, 20)),
+                    "NO SEATBELT",
+                    (tx1 + 10, max(ty1 + 28, 25)),
                     cv2.FONT_HERSHEY_SIMPLEX,
-                    0.6,
+                    0.7,
                     (0, 0, 255),
                     2,
                 )
 
-        sb_color = (0, 255, 128) if seatbelt_detected else (0, 0, 255)
+        sb_color = (0, 255, 128) if seatbelt_detected else ((0, 0, 255) if reliable_face else (148, 163, 184))
+        sb_display = "Fastened" if seatbelt_detected else ("No Seatbelt" if reliable_face else "Unknown")
         cv2.putText(
             annotated,
-            f"Seatbelt: {seatbelt_status}",
+            f"Seatbelt: {sb_display}",
             (20, 254),
             cv2.FONT_HERSHEY_SIMPLEX,
             0.68,

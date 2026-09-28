@@ -31,7 +31,7 @@ class InsideState:
     phone_confidence: float = 0.0
     yawning: bool = False
     distracted: bool = False
-    seatbelt_detected: bool = True
+    seatbelt_detected: bool = False
     seatbelt_status: str = "Unknown"
     drowsy_frames: int = 0
     yawn_frames: int = 0

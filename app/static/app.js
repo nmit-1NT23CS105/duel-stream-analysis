@@ -281,14 +281,16 @@ async function fetchState() {
     : "No handheld phone seen";
   const sbStatus = data.inside.seatbelt_status || "Unknown";
   if (seatbeltValue) {
-    seatbeltValue.textContent = sbStatus;
     if (sbStatus === "Fastened") {
+      seatbeltValue.textContent = "Fastened (Worn)";
       seatbeltValue.style.color = "#10b981";
       seatbeltNote.textContent = "Safety restraint fastened";
     } else if (sbStatus === "Unfastened") {
+      seatbeltValue.textContent = "No Seatbelt";
       seatbeltValue.style.color = "#ef4444";
       seatbeltNote.textContent = "Seatbelt NOT fastened";
     } else {
+      seatbeltValue.textContent = sbStatus;
       seatbeltValue.style.color = "#94a3b8";
       seatbeltNote.textContent = "Restraint status unconfirmed";
     }
