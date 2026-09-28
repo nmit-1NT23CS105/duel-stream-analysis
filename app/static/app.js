@@ -5,6 +5,8 @@ const modeNote = document.getElementById("modeNote");
 const driverStatus = document.getElementById("driverStatus");
 const driverNote = document.getElementById("driverNote");
 const earValue = document.getElementById("earValue");
+const phoneUsageValue = document.getElementById("phoneUsageValue");
+const phoneUsageNote = document.getElementById("phoneUsageNote");
 const vehicleCount = document.getElementById("vehicleCount");
 const trafficLevel = document.getElementById("trafficLevel");
 const fpsValue = document.getElementById("fpsValue");
@@ -20,6 +22,13 @@ const insideStreamBadge = document.getElementById("insideStreamBadge");
 const outsideStreamBadge = document.getElementById("outsideStreamBadge");
 const insideHealth = document.getElementById("insideHealth");
 const outsideHealth = document.getElementById("outsideHealth");
+const eventsList = document.getElementById("eventsList");
+const validationPanel = document.getElementById("validationPanel");
+const insideValidationSummary = document.getElementById("insideValidationSummary");
+const outsideValidationSummary = document.getElementById("outsideValidationSummary");
+const insideValidationMeta = document.getElementById("insideValidationMeta");
+const outsideValidationMeta = document.getElementById("outsideValidationMeta");
+const validationWarnings = document.getElementById("validationWarnings");
 
 const liveModeBtn = document.getElementById("liveModeBtn");
 const recordedModeBtn = document.getElementById("recordedModeBtn");
@@ -39,6 +48,7 @@ let selectedMode = "live";
 let activeMode = "live";
 let processingEnabled = false;
 let hasPendingConfig = false;
+let latestValidation = null;
 
 function setRiskPill(level) {
   riskLevel.textContent = level;
@@ -50,6 +60,11 @@ function setSelectedModeUI(mode) {
   liveModeBtn.classList.toggle("active", mode === "live");
   recordedModeBtn.classList.toggle("active", mode === "recorded");
   uploadGrid.classList.toggle("hidden", mode !== "recorded");
+  if (mode !== "recorded") {
+    validationPanel.classList.add("hidden");
+  } else if (latestValidation) {
+    renderValidation(latestValidation, mode);
+  }
 }
 
 function setActiveModeUI(mode) {
@@ -99,9 +114,14 @@ function setProcessingState(enabled) {
   setStreamBadges(activeMode, enabled);
 }
 
-function setStatus(message, isError = false) {
+function setStatus(message, isError = false, tone = "info") {
   configStatus.textContent = message;
-  configStatus.style.color = isError ? "var(--critical)" : "var(--muted)";
+  configStatus.className = "status-chip";
+  if (isError || tone === "error") {
+    configStatus.classList.add("error");
+  } else if (tone === "warn") {
+    configStatus.classList.add("warn");
+  }
 }
 
 function isLiveCameraIndex(value) {
@@ -115,6 +135,95 @@ function renderReasons(reasons) {
     item.textContent = reason;
     reasonsList.appendChild(item);
   });
+}
+
+function renderRecentEvents(events) {
+  eventsList.innerHTML = "";
+
+  if (!events || !events.length) {
+    const item = document.createElement("li");
+    item.className = "event-item";
+    item.innerHTML = `
+      <strong>No saved alerts yet</strong>
+      <p>High and critical incidents will appear here once the system starts logging them.</p>
+    `;
+    eventsList.appendChild(item);
+    return;
+  }
+
+  events.forEach((event) => {
+    const item = document.createElement("li");
+    item.className = "event-item";
+
+    const createdAt = new Date(event.created_at);
+    const timeLabel = Number.isNaN(createdAt.getTime())
+      ? event.created_at
+      : createdAt.toLocaleString();
+
+    const summary = `${event.inside_status} | ${event.outside_traffic} traffic`;
+    const reason = (event.reasons && event.reasons[0]) || "No explanation saved";
+
+    item.innerHTML = `
+      <div class="section-head">
+        <strong>${timeLabel}</strong>
+        <span class="pill ${String(event.risk_level || "low").toLowerCase()}">${event.risk_level}</span>
+      </div>
+      <p>${summary}</p>
+      <small>${reason}</small>
+    `;
+    eventsList.appendChild(item);
+  });
+}
+
+function normalizeValidation(bundle) {
+  return bundle || {
+    inside: { scene: "unknown", confidence: 0, summary: "No validation yet", warning: "" },
+    outside: { scene: "unknown", confidence: 0, summary: "No validation yet", warning: "" },
+    warnings: [],
+  };
+}
+
+function formatValidationMeta(validation, streamName) {
+  if (!validation || !validation.sampled_frames) {
+    return streamName === "inside"
+      ? "Upload a cabin video to inspect its scene type."
+      : "Upload a road video to inspect its scene type.";
+  }
+  return `Scene: ${validation.scene} | Confidence: ${Number(validation.confidence || 0).toFixed(2)} | Sampled frames: ${validation.sampled_frames}`;
+}
+
+function renderValidation(bundle, mode = selectedMode) {
+  latestValidation = normalizeValidation(bundle);
+  const { inside, outside, warnings } = latestValidation;
+
+  const hasContent = Boolean(
+    (inside && inside.sampled_frames) ||
+    (outside && outside.sampled_frames) ||
+    (warnings && warnings.length),
+  );
+
+  if (mode !== "recorded" || !hasContent) {
+    validationPanel.classList.add("hidden");
+    return;
+  }
+
+  validationPanel.classList.remove("hidden");
+  insideValidationSummary.textContent = inside.summary || "No validation yet";
+  outsideValidationSummary.textContent = outside.summary || "No validation yet";
+  insideValidationMeta.textContent = formatValidationMeta(inside, "inside");
+  outsideValidationMeta.textContent = formatValidationMeta(outside, "outside");
+
+  validationWarnings.innerHTML = "";
+  if (warnings && warnings.length) {
+    validationWarnings.classList.remove("hidden");
+    warnings.forEach((warning) => {
+      const item = document.createElement("li");
+      item.textContent = warning;
+      validationWarnings.appendChild(item);
+    });
+  } else {
+    validationWarnings.classList.add("hidden");
+  }
 }
 
 function renderPlayback(playback, mode) {
@@ -157,8 +266,15 @@ async function fetchState() {
   }
   setProcessingState(data.input.enabled);
   driverStatus.textContent = data.inside.status;
-  driverNote.textContent = `${data.inside.confidence_note} | MAR ${Number(data.inside.mar || 0).toFixed(2)} | Attn ${Number(data.inside.attention_score || 0).toFixed(2)}`;
+  const phoneLabel = data.inside.phone_detected
+    ? `Phone ${Number(data.inside.phone_confidence || 0).toFixed(2)}`
+    : "Phone clear";
+  driverNote.textContent = `${data.inside.confidence_note} | ${phoneLabel} | MAR ${Number(data.inside.mar || 0).toFixed(2)} | Attn ${Number(data.inside.attention_score || 0).toFixed(2)}`;
   earValue.textContent = Number(data.inside.ear).toFixed(2);
+  phoneUsageValue.textContent = data.inside.phone_detected ? "Detected" : "Clear";
+  phoneUsageNote.textContent = data.inside.phone_detected
+    ? `Confidence ${Number(data.inside.phone_confidence || 0).toFixed(2)}`
+    : "No handheld phone seen";
   vehicleCount.textContent = data.outside.vehicle_count;
   trafficLevel.textContent = `${data.outside.traffic_level} traffic | close ${data.outside.close_vehicle_count || 0}`;
   fpsValue.textContent = `${Number(data.inside_fps).toFixed(1)} / ${Number(data.outside_fps).toFixed(1)}`;
@@ -177,6 +293,13 @@ async function fetchInputConfig() {
     setSelectedModeUI(data.mode || "live");
   }
   setProcessingState(data.enabled !== false);
+  renderValidation(data.validation, data.mode || "live");
+}
+
+async function fetchRecentEvents() {
+  const response = await fetch("/api/events?limit=4");
+  const data = await response.json();
+  renderRecentEvents(data.events || []);
 }
 
 async function applyConfig() {
@@ -201,6 +324,11 @@ async function applyConfig() {
   setProcessingState(data.config.enabled);
   insideSourceInput.value = data.config.inside_source;
   outsideSourceInput.value = data.config.outside_source;
+  renderValidation(data.config.validation, data.config.mode);
+  if (data.config.validation?.warnings?.length) {
+    setStatus(data.config.validation.warnings[0], false, "warn");
+    return;
+  }
   setStatus("Input mode updated");
 }
 
@@ -257,12 +385,17 @@ async function uploadRecording(streamName, inputElement) {
   }
   hasPendingConfig = true;
   setSelectedModeUI("recorded");
-  setStatus(`${streamName} video uploaded. Click Apply to analyze`);
+  renderValidation(data.bundle, "recorded");
+  if (data.bundle?.warnings?.length) {
+    setStatus(data.bundle.warnings[0], false, "warn");
+  } else {
+    setStatus(`${streamName} video uploaded. Click Apply to analyze`);
+  }
 }
 
 async function refresh() {
   try {
-    await Promise.all([fetchState(), fetchInputConfig()]);
+    await Promise.all([fetchState(), fetchInputConfig(), fetchRecentEvents()]);
   } catch (error) {
     console.error("Dashboard refresh failed", error);
   }
@@ -334,4 +467,4 @@ outsideSourceInput.addEventListener("input", () => {
 });
 
 refresh();
-setInterval(fetchState, 1000);
+setInterval(refresh, 1500);

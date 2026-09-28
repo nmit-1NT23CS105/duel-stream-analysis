@@ -36,9 +36,9 @@ function renderIncidents(events) {
 
   if (!events.length) {
     const empty = document.createElement("article");
-    empty.className = "card empty-state";
+    empty.className = "panel empty-state";
     empty.innerHTML = `
-      <span class="label">No Results</span>
+      <span class="panel-label">No Results</span>
       <strong>Nothing matched this filter</strong>
       <p>Try a broader severity or clear the search term.</p>
     `;
@@ -48,7 +48,7 @@ function renderIncidents(events) {
 
   events.forEach((event) => {
     const card = document.createElement("article");
-    card.className = "card incident-card";
+    card.className = "panel incident-card";
 
     const createdAt = new Date(event.created_at);
     const timeLabel = Number.isNaN(createdAt.getTime())
@@ -58,7 +58,7 @@ function renderIncidents(events) {
     card.innerHTML = `
       <div class="incident-card-top">
         <div>
-          <span class="label">Incident #${event.id}</span>
+          <span class="panel-label">Incident #${event.id}</span>
           <h2>${timeLabel}</h2>
         </div>
         <div class="incident-card-score">
@@ -68,11 +68,11 @@ function renderIncidents(events) {
       </div>
       <div class="incident-summary-grid">
         <div>
-          <span class="label">Inside</span>
+          <span class="panel-label">Inside</span>
           <p>${event.inside_status}</p>
         </div>
         <div>
-          <span class="label">Outside</span>
+          <span class="panel-label">Outside</span>
           <p>${event.outside_traffic}</p>
         </div>
       </div>
@@ -87,7 +87,7 @@ function renderIncidents(events) {
         </figure>
       </div>
       <div class="incident-reasons">
-        <span class="label">Reasons</span>
+        <span class="panel-label">Reasons</span>
       </div>
     `;
 

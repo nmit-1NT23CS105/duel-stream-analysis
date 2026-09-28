@@ -22,6 +22,7 @@
         <div class="hero-actions">
           <nav class="page-nav" aria-label="Page navigation">
             <a class="nav-link active" href="/">Dashboard</a>
+            <a class="nav-link" href="/incidents">Incidents</a>
           </nav>
           <div class="hero-status">
             <span id="riskLevel" class="pill low">Low</span>
@@ -91,6 +92,12 @@
             </article>
 
             <article class="panel metric-card">
+              <span class="panel-label">Phone Use</span>
+              <strong id="phoneUsageValue">Clear</strong>
+              <small id="phoneUsageNote">No handheld phone seen</small>
+            </article>
+
+            <article class="panel metric-card">
               <span class="panel-label">Vehicles Now</span>
               <strong id="vehicleCount">0</strong>
               <small id="trafficLevel">Current road count</small>
@@ -154,6 +161,31 @@
                 <button id="uploadOutsideBtn" class="upload-btn" type="button">Upload Outside</button>
               </div>
             </div>
+
+            <div id="validationPanel" class="validation-panel hidden">
+              <div class="section-head">
+                <div>
+                  <span class="panel-label">Recorded Validation</span>
+                  <h3>Scene-Type Check</h3>
+                </div>
+                <span class="score-tag">Phase 2</span>
+              </div>
+
+              <div class="validation-grid">
+                <div class="validation-card">
+                  <span class="panel-label">Inside Upload</span>
+                  <strong id="insideValidationSummary">No validation yet</strong>
+                  <small id="insideValidationMeta">Upload a cabin video to inspect its scene type.</small>
+                </div>
+                <div class="validation-card">
+                  <span class="panel-label">Outside Upload</span>
+                  <strong id="outsideValidationSummary">No validation yet</strong>
+                  <small id="outsideValidationMeta">Upload a road video to inspect its scene type.</small>
+                </div>
+              </div>
+
+              <ul id="validationWarnings" class="validation-list hidden"></ul>
+            </div>
           </article>
 
           <section id="playbackSection" class="playback-section hidden">
@@ -188,6 +220,17 @@
                 </div>
               </div>
             </article>
+          </section>
+
+          <section class="panel">
+            <div class="section-head">
+              <div>
+                <span class="panel-label">Recent Alerts</span>
+                <h3>Saved High-Risk Events</h3>
+              </div>
+              <a class="section-link" href="/incidents">View all</a>
+            </div>
+            <ul id="eventsList" class="events-list"></ul>
           </section>
 
         </aside>

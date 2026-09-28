@@ -12,8 +12,10 @@ from app.config import Settings
 from app.core.state import InputState, InsideState, OutsideState, SystemState
 from app.fusion.risk_engine import RiskEngine
 from app.models.inside_monitor import InsideMonitor
-from app.models.outside_monitor import OutsideMonitor
+from app.models.outside_monitor import OutsideMonitor, VEHICLE_CLASS_IDS
 from app.storage.event_store import EventStore
+
+ALLOWED_VIDEO_EXTENSIONS = {".mp4", ".avi", ".mov", ".mkv", ".webm", ".m4v"}
 
 
 class DualStreamService:
@@ -37,6 +39,9 @@ class DualStreamService:
         self._event_store = EventStore(settings)
         self._threads: list[threading.Thread] = []
         self._source_versions = {"inside": 0, "outside": 0}
+        self._pending_uploaded_sources = {"inside": "", "outside": ""}
+        self._recorded_validation = self._empty_validation_bundle()
+        self._validation_cache: dict[str, dict] = {}
         self.settings.upload_dir.mkdir(parents=True, exist_ok=True)
 
     def start(self) -> None:
@@ -74,6 +79,7 @@ class DualStreamService:
                 "inside_source": self.state.input.inside_source,
                 "outside_source": self.state.input.outside_source,
                 "enabled": self.state.input.enabled,
+                "validation": self._recorded_validation,
             }
 
     def configure_inputs(
@@ -86,12 +92,21 @@ class DualStreamService:
         if normalized_mode not in {"live", "recorded"}:
             raise ValueError("Mode must be 'live' or 'recorded'.")
 
-        with self._lock:
-            next_inside = inside_source.strip() if inside_source is not None else self.state.input.inside_source
-            next_outside = outside_source.strip() if outside_source is not None else self.state.input.outside_source
+        validation_bundle = self._empty_validation_bundle()
+        next_inside = ""
+        next_outside = ""
 
-            if normalized_mode == "recorded":
-                next_inside, next_outside = self._prepare_recorded_sources(next_inside, next_outside)
+        if normalized_mode == "recorded":
+            current_config = self.get_input_config()
+            next_inside = inside_source.strip() if inside_source is not None else current_config["inside_source"]
+            next_outside = outside_source.strip() if outside_source is not None else current_config["outside_source"]
+            next_inside, next_outside = self._prepare_recorded_sources(next_inside, next_outside)
+            validation_bundle = self._build_recorded_validation_bundle(next_inside, next_outside)
+
+        with self._lock:
+            if normalized_mode != "recorded":
+                next_inside = inside_source.strip() if inside_source is not None else self.state.input.inside_source
+                next_outside = outside_source.strip() if outside_source is not None else self.state.input.outside_source
 
             self.state.input.mode = normalized_mode
             self.state.input.inside_source = next_inside
@@ -102,6 +117,9 @@ class DualStreamService:
             self._inside_monitor.reset()
             self._outside_monitor.reset()
             self._risk_engine.reset()
+            self._recorded_validation = (
+                validation_bundle if normalized_mode == "recorded" else self._empty_validation_bundle()
+            )
 
         return self.get_input_config()
 
@@ -129,18 +147,37 @@ class DualStreamService:
             self.state.input.enabled = True
         return self.get_input_config()
 
-    def save_uploaded_recording(self, stream_name: str, filename: str, payload: bytes) -> str:
+    def save_uploaded_recording(self, stream_name: str, filename: str, payload: bytes) -> dict:
         if stream_name not in {"inside", "outside"}:
             raise ValueError("Stream must be 'inside' or 'outside'.")
         if not payload:
             raise ValueError("Uploaded file is empty.")
+        if len(payload) > self.settings.upload_max_bytes:
+            max_mb = self.settings.upload_max_bytes / (1024 * 1024)
+            raise ValueError(f"Uploaded file is too large. Limit is {max_mb:.0f} MB.")
 
         safe_name = Path(filename or f"{stream_name}.mp4").name
         extension = Path(safe_name).suffix or ".mp4"
+        if extension.lower() not in ALLOWED_VIDEO_EXTENSIONS:
+            allowed = ", ".join(sorted(ALLOWED_VIDEO_EXTENSIONS))
+            raise ValueError(f"Unsupported video type '{extension}'. Allowed types: {allowed}.")
         timestamp = time.strftime("%Y%m%d_%H%M%S")
         target = self.settings.upload_dir / f"{stream_name}_{timestamp}{extension}"
         target.write_bytes(payload)
-        return str(target)
+        target_path = str(target)
+        self._pending_uploaded_sources[stream_name] = target_path
+        validation = self._get_or_build_scene_validation(target_path, stream_name)
+        bundle = self._build_recorded_validation_bundle(
+            self._pending_uploaded_sources["inside"],
+            self._pending_uploaded_sources["outside"],
+        )
+        with self._lock:
+            self._recorded_validation = bundle
+        return {
+            "path": target_path,
+            "validation": validation,
+            "bundle": bundle,
+        }
 
     def frame_stream(self, stream_name: str) -> Generator[bytes, None, None]:
         while not self._stop_event.is_set():
@@ -394,3 +431,190 @@ class DualStreamService:
         if stripped.isdigit():
             return ""
         return stripped
+
+    @staticmethod
+    def _empty_scene_validation(stream_name: str) -> dict:
+        return {
+            "stream": stream_name,
+            "scene": "unknown",
+            "confidence": 0.0,
+            "face_ratio": 0.0,
+            "vehicle_ratio": 0.0,
+            "sampled_frames": 0,
+            "warning": "",
+            "summary": "No validation yet",
+            "source": "",
+        }
+
+    def _empty_validation_bundle(self) -> dict:
+        return {
+            "inside": self._empty_scene_validation("inside"),
+            "outside": self._empty_scene_validation("outside"),
+            "warnings": [],
+        }
+
+    def _build_recorded_validation_bundle(self, inside_source: str, outside_source: str) -> dict:
+        inside_validation = (
+            self._get_or_build_scene_validation(inside_source, "inside")
+            if inside_source
+            else self._empty_scene_validation("inside")
+        )
+        outside_validation = (
+            self._get_or_build_scene_validation(outside_source, "outside")
+            if outside_source
+            else self._empty_scene_validation("outside")
+        )
+        warnings = self._combine_validation_warnings(inside_validation, outside_validation)
+        return {
+            "inside": inside_validation,
+            "outside": outside_validation,
+            "warnings": warnings,
+        }
+
+    def _get_or_build_scene_validation(self, source_value: str, expected_stream: str) -> dict:
+        if not source_value:
+            return self._empty_scene_validation(expected_stream)
+        cached = self._validation_cache.get(source_value)
+        if cached is not None:
+            return cached
+        validation = self._inspect_recorded_scene(source_value, expected_stream)
+        self._validation_cache[source_value] = validation
+        return validation
+
+    def _combine_validation_warnings(self, inside_validation: dict, outside_validation: dict) -> list[str]:
+        warnings: list[str] = []
+        for validation in (inside_validation, outside_validation):
+            if validation["warning"]:
+                warnings.append(validation["warning"])
+
+        inside_scene = inside_validation["scene"]
+        outside_scene = outside_validation["scene"]
+        if inside_scene == "road" and outside_scene == "cabin":
+            warnings.insert(
+                0,
+                "Uploads look swapped: the inside stream appears road-facing and the outside stream appears cabin-facing.",
+            )
+        return list(dict.fromkeys(warnings))
+
+    def _inspect_recorded_scene(self, source_value: str, expected_stream: str) -> dict:
+        validation = self._empty_scene_validation(expected_stream)
+        validation["source"] = source_value
+
+        path = Path(source_value)
+        if not path.exists():
+            validation["warning"] = f"{expected_stream.title()} source does not exist for validation."
+            validation["summary"] = validation["warning"]
+            return validation
+
+        cap = cv2.VideoCapture(str(path))
+        if not cap.isOpened():
+            validation["warning"] = f"{expected_stream.title()} source could not be opened for validation."
+            validation["summary"] = validation["warning"]
+            return validation
+
+        try:
+            total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+            max_samples = max(self.settings.upload_validation_frames, 1)
+            sample_positions = self._sample_positions(total_frames, max_samples)
+
+            face_hits = 0
+            vehicle_hits = 0
+            sampled_frames = 0
+
+            for frame_index in sample_positions:
+                if total_frames > 0:
+                    cap.set(cv2.CAP_PROP_POS_FRAMES, frame_index)
+                ok, frame = cap.read()
+                if not ok or frame is None:
+                    continue
+                sampled_frames += 1
+                if self._frame_has_face(frame):
+                    face_hits += 1
+                if self._frame_has_vehicle(frame):
+                    vehicle_hits += 1
+
+            validation["sampled_frames"] = sampled_frames
+            if sampled_frames == 0:
+                validation["warning"] = f"{expected_stream.title()} source did not yield frames for validation."
+                validation["summary"] = validation["warning"]
+                return validation
+
+            face_ratio = face_hits / sampled_frames
+            vehicle_ratio = vehicle_hits / sampled_frames
+            scene, confidence = self._classify_scene(face_ratio, vehicle_ratio)
+
+            validation["scene"] = scene
+            validation["confidence"] = round(confidence, 3)
+            validation["face_ratio"] = round(face_ratio, 3)
+            validation["vehicle_ratio"] = round(vehicle_ratio, 3)
+            validation["warning"] = self._scene_warning(expected_stream, scene, confidence)
+            validation["summary"] = (
+                f"Scene looks {scene} | face frames {face_hits}/{sampled_frames} | "
+                f"vehicle frames {vehicle_hits}/{sampled_frames}"
+            )
+            return validation
+        finally:
+            cap.release()
+
+    @staticmethod
+    def _sample_positions(total_frames: int, max_samples: int) -> list[int]:
+        if total_frames <= 0:
+            return list(range(max_samples))
+        if total_frames <= max_samples:
+            return list(range(total_frames))
+        last_index = max(total_frames - 1, 1)
+        return sorted({int((last_index * idx) / max(max_samples - 1, 1)) for idx in range(max_samples)})
+
+    def _frame_has_face(self, frame: np.ndarray) -> bool:
+        rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        results = self._inside_monitor._face_mesh.process(rgb_frame)
+        return bool(results.multi_face_landmarks)
+
+    def _frame_has_vehicle(self, frame: np.ndarray) -> bool:
+        if self._outside_monitor.model is None:
+            return False
+        inference = self._outside_monitor.model.predict(
+            source=frame,
+            conf=max(self.settings.yolo_confidence, 0.25),
+            iou=self.settings.yolo_iou,
+            imgsz=min(self.settings.yolo_imgsz, 640),
+            device=self.settings.yolo_device,
+            half=self.settings.yolo_half and self.settings.yolo_device != "cpu",
+            verbose=False,
+            classes=list(VEHICLE_CLASS_IDS),
+        )
+        if not inference:
+            return False
+        boxes = inference[0].boxes
+        if boxes is None or len(boxes) == 0:
+            return False
+        xyxy_values = boxes.xyxy.int().cpu().tolist() if boxes.xyxy is not None else []
+        for x1, y1, x2, y2 in xyxy_values:
+            box_area = max((x2 - x1), 0) * max((y2 - y1), 0)
+            if box_area >= self.settings.min_vehicle_box_area:
+                return True
+        return False
+
+    def _classify_scene(self, face_ratio: float, vehicle_ratio: float) -> tuple[str, float]:
+        face_threshold = self.settings.upload_validation_min_face_ratio
+        vehicle_threshold = self.settings.upload_validation_min_vehicle_ratio
+
+        if face_ratio >= face_threshold and vehicle_ratio < vehicle_threshold * 0.6:
+            return "cabin", face_ratio
+        if vehicle_ratio >= vehicle_threshold and face_ratio < face_threshold * 0.6:
+            return "road", vehicle_ratio
+        if face_ratio >= face_threshold * 0.85 and vehicle_ratio >= vehicle_threshold * 0.85:
+            return "mixed", max(face_ratio, vehicle_ratio)
+        return "unclear", max(face_ratio, vehicle_ratio)
+
+    @staticmethod
+    def _scene_warning(expected_stream: str, scene: str, confidence: float) -> str:
+        if expected_stream == "inside" and scene == "road":
+            return "Inside upload appears to be road footage. Check whether the streams were swapped."
+        if expected_stream == "outside" and scene == "cabin":
+            return "Outside upload appears to be cabin footage. Check whether the streams were swapped."
+        if scene == "mixed":
+            return "Scene validation is mixed. Review the selected video before applying recorded mode."
+        if scene == "unclear" and confidence < 0.2:
+            return "Scene validation is low confidence. Results may depend on camera angle or lighting."
+        return ""

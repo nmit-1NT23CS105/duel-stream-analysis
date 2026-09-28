@@ -27,6 +27,8 @@ class InsideState:
     ear: float = 0.0
     mar: float = 0.0
     attention_score: float = 1.0
+    phone_detected: bool = False
+    phone_confidence: float = 0.0
     yawning: bool = False
     distracted: bool = False
     drowsy_frames: int = 0

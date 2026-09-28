@@ -43,6 +43,9 @@ class RiskEngine:
         elif inside.status == "Distracted":
             score += 34
             reasons.append(f"Driver attention dropped ({inside.attention_score:.2f})")
+        elif inside.status == "Phone Use":
+            score += 30
+            reasons.append(f"Possible handheld phone usage detected ({inside.phone_confidence:.2f})")
         elif inside.status == "Yawning":
             score += 18
             reasons.append(f"Sustained yawn detected ({inside.mar:.2f})")
@@ -81,15 +84,25 @@ class RiskEngine:
             score += 6
             reasons.append(f"Nearby vehicle footprint rising ({outside.proximity_score:.2f})")
 
+        if inside.phone_detected and inside.status != "Phone Use":
+            score += 18
+            reasons.append(f"Phone usage signal present ({inside.phone_confidence:.2f})")
+
         if inside.status in {"Drowsy", "Fatigue Risk"} and outside.close_vehicle:
             score += 25
             reasons.append("Fatigued driver with close front vehicle")
+        elif inside.phone_detected and outside.close_vehicle:
+            score += 20
+            reasons.append("Phone use detected with close front vehicle")
         elif inside.status == "Distracted" and outside.close_vehicle:
             score += 18
             reasons.append("Distracted driver with close front vehicle")
         elif inside.status == "Yawning" and outside.vehicle_count >= 4:
             score += 10
             reasons.append("Yawning driver in active traffic")
+        elif inside.phone_detected and outside.vehicle_count >= 4:
+            score += 12
+            reasons.append("Phone use detected in active traffic")
         elif inside.status == "Distracted" and outside.vehicle_count >= 4:
             score += 10
             reasons.append("Distracted driver in active traffic")

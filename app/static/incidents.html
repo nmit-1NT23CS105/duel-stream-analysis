@@ -3,23 +3,77 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Incident History Disabled</title>
-  <link rel="stylesheet" href="/static/styles.css?v=20260410-ui-refresh-3" />
+  <title>Incident History</title>
+  <link rel="stylesheet" href="/static/styles.css?v=20260806-events" />
 </head>
 <body>
   <div class="app-shell">
     <main class="workspace">
+      <header class="hero-bar">
+        <div>
+          <p class="eyebrow">Driver Safety Monitoring System</p>
+          <div class="hero-title-row">
+            <h2 class="page-title">Incident History</h2>
+            <span id="incidentCount" class="hero-session">0 incidents</span>
+          </div>
+          <p class="hero-copy">Review stored high-risk and critical events with snapshots, reasons, and filtering tools.</p>
+        </div>
+
+        <div class="hero-actions">
+          <nav class="page-nav" aria-label="Page navigation">
+            <a class="nav-link" href="/">Dashboard</a>
+            <a class="nav-link active" href="/incidents">Incidents</a>
+          </nav>
+        </div>
+      </header>
+
       <section class="incident-layout">
-        <article class="panel incident-toolbar empty-state">
-          <span class="panel-label">Feature Update</span>
-          <h2 class="page-title">Incident History Disabled</h2>
-          <p class="hero-copy">Incident history has been removed from the current build, and no incidents are being stored now.</p>
-          <div class="action-group">
-            <a class="apply-btn" href="/">Back to Dashboard</a>
+        <article class="panel incident-toolbar">
+          <div class="section-head">
+            <div>
+              <span class="panel-label">Event Filters</span>
+              <h3>Search Saved Incidents</h3>
+            </div>
+            <span class="score-tag">Phase 2</span>
+          </div>
+
+          <div class="incident-filter-grid">
+            <label class="field">
+              <span>Search</span>
+              <input id="searchInput" type="text" placeholder="Search by reason, inside state, or traffic..." />
+            </label>
+
+            <label class="field">
+              <span>Severity</span>
+              <select id="severityFilter" class="select-field">
+                <option>All</option>
+                <option>High</option>
+                <option>Critical</option>
+              </select>
+            </label>
+
+            <label class="field">
+              <span>Limit</span>
+              <select id="limitFilter" class="select-field">
+                <option value="8">8</option>
+                <option value="16">16</option>
+                <option value="24" selected>24</option>
+                <option value="40">40</option>
+              </select>
+            </label>
+
+            <div class="incident-toolbar-actions">
+              <button id="searchBtn" class="apply-btn" type="button">Search</button>
+              <button id="clearBtn" class="mode-btn" type="button">Clear</button>
+            </div>
           </div>
         </article>
+
+        <section id="incidentGrid" class="incident-grid"></section>
       </section>
     </main>
   </div>
+
+  <script src="/static/incidents.js?v=20260806-events"></script>
 </body>
 </html>

@@ -106,6 +106,15 @@ class Settings:
     extreme_pose_balance_threshold: float = float(os.getenv("EXTREME_POSE_BALANCE_THRESHOLD", "0.42"))
     pose_head_offset_bonus: float = float(os.getenv("POSE_HEAD_OFFSET_BONUS", "0.05"))
     dominant_eye_weight: float = float(os.getenv("DOMINANT_EYE_WEIGHT", "0.72"))
+    inside_phone_model: str = os.getenv("INSIDE_PHONE_MODEL", "yolov8n.pt")
+    inside_phone_confidence: float = float(os.getenv("INSIDE_PHONE_CONFIDENCE", "0.22"))
+    inside_phone_imgsz: int = int(os.getenv("INSIDE_PHONE_IMGSZ", "640"))
+    inside_phone_detection_interval: int = int(os.getenv("INSIDE_PHONE_DETECTION_INTERVAL", "3"))
+    inside_phone_min_box_area: int = int(os.getenv("INSIDE_PHONE_MIN_BOX_AREA", "320"))
+    phone_consec_frames: int = int(os.getenv("PHONE_CONSEC_FRAMES", "2"))
+    inside_confidence_floor: float = float(os.getenv("INSIDE_CONFIDENCE_FLOOR", "0.18"))
+    outside_confidence_floor: float = float(os.getenv("OUTSIDE_CONFIDENCE_FLOOR", "0.35"))
+    fusion_low_confidence_threshold: float = float(os.getenv("FUSION_LOW_CONFIDENCE_THRESHOLD", "0.45"))
 
     outside_smoothing_window: int = int(os.getenv("OUTSIDE_SMOOTHING_WINDOW", "5"))
     min_track_confirmations: int = int(os.getenv("MIN_TRACK_CONFIRMATIONS", "2"))
@@ -120,6 +129,12 @@ class Settings:
     snapshot_dir: Path = Path(os.getenv("SNAPSHOT_DIR", "data/events"))
     db_path: Path = Path(os.getenv("DB_PATH", "data/phase1.db"))
     upload_dir: Path = Path(os.getenv("UPLOAD_DIR", "data/uploads"))
+    upload_max_bytes: int = int(os.getenv("UPLOAD_MAX_BYTES", str(250 * 1024 * 1024)))
+    upload_validation_frames: int = int(os.getenv("UPLOAD_VALIDATION_FRAMES", "8"))
+    upload_validation_min_face_ratio: float = float(os.getenv("UPLOAD_VALIDATION_MIN_FACE_RATIO", "0.35"))
+    upload_validation_min_vehicle_ratio: float = float(os.getenv("UPLOAD_VALIDATION_MIN_VEHICLE_RATIO", "0.25"))
 
 
 settings = Settings()
+settings.snapshot_dir.mkdir(parents=True, exist_ok=True)
+settings.upload_dir.mkdir(parents=True, exist_ok=True)

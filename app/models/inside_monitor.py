@@ -13,6 +13,7 @@ os.environ.setdefault("GLOG_minloglevel", "2")
 
 import mediapipe as mp
 import numpy as np
+from ultralytics import YOLO
 
 from app.config import Settings
 from app.core.state import InsideState
@@ -24,6 +25,7 @@ MOUTH = [78, 81, 13, 308, 311, 14, 82, 87, 312, 317]
 NOSE_TIP = 1
 LEFT_CHEEK = 234
 RIGHT_CHEEK = 454
+PHONE_CLASS_ID = 67
 
 
 @dataclass(slots=True)
@@ -35,9 +37,14 @@ class InsideResult:
 class InsideMonitor:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
+        self._frame_index = 0
         self._drowsy_counter = 0
         self._yawn_counter = 0
         self._distraction_counter = 0
+        self._phone_counter = 0
+        self._last_phone_detected = False
+        self._last_phone_confidence = 0.0
+        self._last_phone_box: tuple[int, int, int, int] | None = None
         window = max(settings.inside_smoothing_window, 1)
         self._ear_history: deque[float] = deque(maxlen=window)
         self._mar_history: deque[float] = deque(maxlen=window)
@@ -52,11 +59,22 @@ class InsideMonitor:
             min_detection_confidence=0.5,
             min_tracking_confidence=0.5,
         )
+        self._phone_detector = None
+        self._phone_load_error = ""
+        try:
+            self._phone_detector = YOLO(settings.inside_phone_model)
+        except Exception as exc:
+            self._phone_load_error = str(exc)
 
     def reset(self) -> None:
+        self._frame_index = 0
         self._drowsy_counter = 0
         self._yawn_counter = 0
         self._distraction_counter = 0
+        self._phone_counter = 0
+        self._last_phone_detected = False
+        self._last_phone_confidence = 0.0
+        self._last_phone_box = None
         self._ear_history.clear()
         self._mar_history.clear()
         self._head_offset_history.clear()
@@ -159,8 +177,69 @@ class InsideMonitor:
         self._drowsy_counter = max(self._drowsy_counter - amount, 0)
         self._yawn_counter = max(self._yawn_counter - amount, 0)
         self._distraction_counter = max(self._distraction_counter - amount, 0)
+        self._phone_counter = max(self._phone_counter - amount, 0)
+
+    def _detect_phone(
+        self,
+        frame: np.ndarray,
+        face_box: tuple[int, int, int, int],
+    ) -> tuple[bool, float, tuple[int, int, int, int] | None]:
+        if self._phone_detector is None:
+            return False, 0.0, None
+
+        x1, y1, x2, y2 = face_box
+        height, width = frame.shape[:2]
+        face_width = max(x2 - x1, 1)
+        face_height = max(y2 - y1, 1)
+        expanded_left = max(0, int(x1 - face_width * 0.9))
+        expanded_right = min(width - 1, int(x2 + face_width * 0.9))
+        expanded_top = max(0, int(y1 - face_height * 0.2))
+        expanded_bottom = min(height - 1, int(y2 + face_height * 1.8))
+
+        inference = self._phone_detector.predict(
+            source=frame,
+            conf=self.settings.inside_phone_confidence,
+            iou=self.settings.yolo_iou,
+            imgsz=self.settings.inside_phone_imgsz,
+            device=self.settings.yolo_device,
+            half=self.settings.yolo_half and self.settings.yolo_device != "cpu",
+            verbose=False,
+            classes=[PHONE_CLASS_ID],
+        )
+        if not inference:
+            return False, 0.0, None
+
+        boxes = inference[0].boxes
+        if boxes is None or len(boxes) == 0:
+            return False, 0.0, None
+
+        confidences = boxes.conf.cpu().tolist() if boxes.conf is not None else [0.0] * len(boxes)
+        xyxy_values = boxes.xyxy.int().cpu().tolist() if boxes.xyxy is not None else []
+
+        best_confidence = 0.0
+        best_box = None
+        for confidence, (bx1, by1, bx2, by2) in zip(confidences, xyxy_values):
+            box_area = max((bx2 - bx1), 0) * max((by2 - by1), 0)
+            if box_area < self.settings.inside_phone_min_box_area:
+                continue
+
+            cx = (bx1 + bx2) // 2
+            cy = (by1 + by2) // 2
+            center_in_driver_zone = (
+                expanded_left <= cx <= expanded_right
+                and expanded_top <= cy <= expanded_bottom
+            )
+            if not center_in_driver_zone:
+                continue
+
+            if confidence > best_confidence:
+                best_confidence = confidence
+                best_box = (bx1, by1, bx2, by2)
+
+        return best_box is not None, best_confidence, best_box
 
     def analyze(self, frame: np.ndarray) -> InsideResult:
+        self._frame_index += 1
         annotated = frame.copy()
         rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         results = self._face_mesh.process(rgb_frame)
@@ -175,6 +254,8 @@ class InsideMonitor:
                 ear=0.0,
                 mar=0.0,
                 attention_score=0.0,
+                phone_detected=False,
+                phone_confidence=0.0,
                 yawning=False,
                 distracted=False,
                 drowsy_frames=0,
@@ -273,6 +354,33 @@ class InsideMonitor:
         else:
             self._distraction_counter = max(self._distraction_counter - 2, 0)
 
+        phone_detected = False
+        phone_confidence = 0.0
+        phone_box = None
+        if reliable_face and self._phone_detector is not None:
+            if self._frame_index % max(self.settings.inside_phone_detection_interval, 1) == 0 or self._last_phone_box is None:
+                phone_detected_now, phone_confidence_now, detected_box = self._detect_phone(frame, (x1, y1, x2, y2))
+                self._last_phone_detected = phone_detected_now
+                self._last_phone_confidence = phone_confidence_now
+                self._last_phone_box = detected_box
+
+            phone_detected = self._last_phone_detected
+            phone_confidence = self._last_phone_confidence
+            phone_box = self._last_phone_box
+
+            if phone_detected:
+                self._phone_counter += 1
+            else:
+                self._phone_counter = max(self._phone_counter - 1, 0)
+        else:
+            self._phone_counter = max(self._phone_counter - 2, 0)
+            if not reliable_face:
+                self._last_phone_box = None
+                self._last_phone_detected = False
+                self._last_phone_confidence = 0.0
+
+        phone_detected = self._phone_counter >= self.settings.phone_consec_frames
+        phone_confidence = phone_confidence if phone_detected else 0.0
         yawning = self._yawn_counter >= self.settings.yawn_consec_frames
         distracted = self._distraction_counter >= self.settings.distraction_consec_frames
         drowsy = self._drowsy_counter >= self.settings.drowsy_consec_frames
@@ -292,6 +400,10 @@ class InsideMonitor:
             status = "Drowsy"
             color = (0, 0, 255)
             confidence_note = f"Low EAR {smoothed_ear:.2f} below adaptive threshold {ear_threshold:.2f}"
+        elif phone_detected:
+            status = "Phone Use"
+            color = (180, 0, 255)
+            confidence_note = f"Handheld phone likely visible near driver ({phone_confidence:.2f})"
         elif distracted:
             status = "Distracted"
             color = (0, 165, 255)
@@ -306,6 +418,18 @@ class InsideMonitor:
             confidence_note = "Stable face landmarks, eyes open, and attention centered"
 
         cv2.rectangle(annotated, (x1, y1), (x2, y2), color, 2)
+        if phone_box is not None and phone_detected:
+            px1, py1, px2, py2 = phone_box
+            cv2.rectangle(annotated, (px1, py1), (px2, py2), (180, 0, 255), 2)
+            cv2.putText(
+                annotated,
+                f"Phone {phone_confidence:.2f}",
+                (px1, max(py1 - 8, 20)),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.65,
+                (180, 0, 255),
+                2,
+            )
 
         for point in left_eye_points + right_eye_points:
             cv2.circle(annotated, point, 2, (255, 255, 0), -1)
@@ -372,6 +496,15 @@ class InsideMonitor:
             (255, 255, 255),
             2,
         )
+        cv2.putText(
+            annotated,
+            f"Phone: {'Yes' if phone_detected else 'No'}",
+            (20, 223),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.68,
+            (255, 255, 255),
+            2,
+        )
 
         state = InsideState(
             available=True,
@@ -380,6 +513,8 @@ class InsideMonitor:
             ear=round(smoothed_ear, 3),
             mar=round(smoothed_mar, 3),
             attention_score=round(attention_score, 3),
+            phone_detected=phone_detected,
+            phone_confidence=round(phone_confidence, 3),
             yawning=yawning,
             distracted=distracted,
             drowsy_frames=self._drowsy_counter,
