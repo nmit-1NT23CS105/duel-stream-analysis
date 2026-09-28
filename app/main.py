@@ -103,10 +103,15 @@ async def get_events(
 @app.post("/api/upload/{stream_name}")
 async def upload_recording(stream_name: str, request: Request, filename: str = "") -> JSONResponse:
     try:
-        payload = await request.body()
-        upload_result = service.save_uploaded_recording(stream_name, filename=filename, payload=payload)
+        upload_result = await service.save_uploaded_recording_stream(
+            stream_name=stream_name,
+            filename=filename,
+            stream=request.stream(),
+        )
     except ValueError as exc:
         return JSONResponse({"error": str(exc)}, status_code=400)
+    except Exception as exc:
+        return JSONResponse({"error": f"Upload failed: {str(exc)}"}, status_code=500)
     return JSONResponse(
         {
             "message": "Recording uploaded",

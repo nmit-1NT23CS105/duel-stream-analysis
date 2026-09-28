@@ -383,46 +383,67 @@ async function sendControl(action) {
   setStatus(data.message || "Updated");
 }
 
-async function uploadRecording(streamName, inputElement) {
+function uploadRecording(streamName, inputElement) {
   const file = inputElement.files[0];
   if (!file) {
     setStatus(`Choose a ${streamName} video first`, true);
     return;
   }
 
-  setStatus(`Uploading ${streamName} video...`);
-  const response = await fetch(`/api/upload/${streamName}?filename=${encodeURIComponent(file.name)}`, {
-    method: "POST",
-    headers: {
-      "Content-Type": file.type || "application/octet-stream",
-    },
-    body: file,
-  });
-  const data = await response.json();
-  if (!response.ok) {
-    setStatus(data.error || "Upload failed", true);
-    return;
-  }
+  const fileSizeMB = (file.size / (1024 * 1024)).toFixed(1);
+  setStatus(`Uploading ${streamName} video (${fileSizeMB} MB)...`);
 
-  if (streamName === "inside") {
-    insideSourceInput.value = data.path;
-    if (isLiveCameraIndex(outsideSourceInput.value)) {
-      outsideSourceInput.value = "";
+  const xhr = new XMLHttpRequest();
+  xhr.open("POST", `/api/upload/${streamName}?filename=${encodeURIComponent(file.name)}`, true);
+  xhr.setRequestHeader("Content-Type", file.type || "application/octet-stream");
+
+  xhr.upload.onprogress = (event) => {
+    if (event.lengthComputable) {
+      const percent = Math.round((event.loaded / event.total) * 100);
+      setStatus(`Uploading ${streamName} video: ${percent}% (${fileSizeMB} MB)...`);
     }
-  } else {
-    outsideSourceInput.value = data.path;
-    if (isLiveCameraIndex(insideSourceInput.value)) {
-      insideSourceInput.value = "";
+  };
+
+  xhr.onload = () => {
+    let data;
+    try {
+      data = JSON.parse(xhr.responseText);
+    } catch (e) {
+      setStatus(`Upload failed: invalid server response`, true);
+      return;
     }
-  }
-  hasPendingConfig = true;
-  setSelectedModeUI("recorded");
-  renderValidation(data.bundle, "recorded");
-  if (data.bundle?.warnings?.length) {
-    setStatus(data.bundle.warnings[0], false, "warn");
-  } else {
-    setStatus(`${streamName} video uploaded. Click Apply to analyze`);
-  }
+
+    if (xhr.status < 200 || xhr.status >= 300) {
+      setStatus(data.error || "Upload failed", true);
+      return;
+    }
+
+    if (streamName === "inside") {
+      insideSourceInput.value = data.path;
+      if (isLiveCameraIndex(outsideSourceInput.value)) {
+        outsideSourceInput.value = "";
+      }
+    } else {
+      outsideSourceInput.value = data.path;
+      if (isLiveCameraIndex(insideSourceInput.value)) {
+        insideSourceInput.value = "";
+      }
+    }
+    hasPendingConfig = true;
+    setSelectedModeUI("recorded");
+    renderValidation(data.bundle, "recorded");
+    if (data.bundle?.warnings?.length) {
+      setStatus(data.bundle.warnings[0], false, "warn");
+    } else {
+      setStatus(`${streamName} video (${fileSizeMB} MB) uploaded. Click Apply to analyze`);
+    }
+  };
+
+  xhr.onerror = () => {
+    setStatus(`Upload connection error for ${streamName} video`, true);
+  };
+
+  xhr.send(file);
 }
 
 async function refresh() {

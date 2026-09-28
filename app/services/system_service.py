@@ -147,12 +147,66 @@ class DualStreamService:
             self.state.input.enabled = True
         return self.get_input_config()
 
+    async def save_uploaded_recording_stream(
+        self,
+        stream_name: str,
+        filename: str,
+        stream,
+    ) -> dict:
+        if stream_name not in {"inside", "outside"}:
+            raise ValueError("Stream must be 'inside' or 'outside'.")
+
+        safe_name = Path(filename or f"{stream_name}.mp4").name
+        extension = Path(safe_name).suffix or ".mp4"
+        if extension.lower() not in ALLOWED_VIDEO_EXTENSIONS:
+            allowed = ", ".join(sorted(ALLOWED_VIDEO_EXTENSIONS))
+            raise ValueError(f"Unsupported video type '{extension}'. Allowed types: {allowed}.")
+
+        timestamp = time.strftime("%Y%m%d_%H%M%S")
+        target = self.settings.upload_dir / f"{stream_name}_{timestamp}{extension}"
+
+        total_bytes = 0
+        try:
+            with open(target, "wb") as f:
+                async for chunk in stream:
+                    if not chunk:
+                        continue
+                    total_bytes += len(chunk)
+                    if self.settings.upload_max_bytes > 0 and total_bytes > self.settings.upload_max_bytes:
+                        max_mb = self.settings.upload_max_bytes / (1024 * 1024)
+                        raise ValueError(f"Uploaded file is too large. Limit is {max_mb:.0f} MB.")
+                    f.write(chunk)
+        except Exception:
+            if target.exists():
+                target.unlink(missing_ok=True)
+            raise
+
+        if total_bytes == 0:
+            if target.exists():
+                target.unlink(missing_ok=True)
+            raise ValueError("Uploaded file is empty.")
+
+        target_path = str(target)
+        self._pending_uploaded_sources[stream_name] = target_path
+        validation = self._get_or_build_scene_validation(target_path, stream_name)
+        bundle = self._build_recorded_validation_bundle(
+            self._pending_uploaded_sources["inside"],
+            self._pending_uploaded_sources["outside"],
+        )
+        with self._lock:
+            self._recorded_validation = bundle
+        return {
+            "path": target_path,
+            "validation": validation,
+            "bundle": bundle,
+        }
+
     def save_uploaded_recording(self, stream_name: str, filename: str, payload: bytes) -> dict:
         if stream_name not in {"inside", "outside"}:
             raise ValueError("Stream must be 'inside' or 'outside'.")
         if not payload:
             raise ValueError("Uploaded file is empty.")
-        if len(payload) > self.settings.upload_max_bytes:
+        if self.settings.upload_max_bytes > 0 and len(payload) > self.settings.upload_max_bytes:
             max_mb = self.settings.upload_max_bytes / (1024 * 1024)
             raise ValueError(f"Uploaded file is too large. Limit is {max_mb:.0f} MB.")
 
