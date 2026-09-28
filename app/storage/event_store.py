@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import csv
 from datetime import datetime
 import hashlib
+import io
 import json
 from pathlib import Path
 import sqlite3
@@ -63,6 +65,7 @@ class EventStore:
         self,
         limit: int = 24,
         risk_level: str | None = None,
+        category: str | None = None,
         search: str | None = None,
     ) -> list[dict]:
         normalized_limit = max(int(limit), 1)
@@ -73,12 +76,16 @@ class EventStore:
             clauses.append("UPPER(risk_level) = UPPER(?)")
             params.append(risk_level)
 
+        if category:
+            clauses.append("UPPER(category) LIKE UPPER(?)")
+            params.append(f"%{category}%")
+
         if search:
             clauses.append(
-                "(created_at LIKE ? OR inside_status LIKE ? OR outside_traffic LIKE ? OR reasons_json LIKE ?)"
+                "(created_at LIKE ? OR category LIKE ? OR inside_status LIKE ? OR outside_traffic LIKE ? OR reasons_json LIKE ?)"
             )
             term = f"%{search}%"
-            params.extend([term, term, term, term])
+            params.extend([term, term, term, term, term])
 
         where_sql = f"WHERE {' AND '.join(clauses)}" if clauses else ""
         query = f"""
@@ -87,6 +94,8 @@ class EventStore:
                 created_at,
                 risk_level,
                 risk_score,
+                category,
+                confidence,
                 inside_status,
                 outside_traffic,
                 reasons_json,
@@ -114,6 +123,8 @@ class EventStore:
                     created_at TEXT NOT NULL,
                     risk_level TEXT NOT NULL,
                     risk_score INTEGER NOT NULL,
+                    category TEXT NOT NULL DEFAULT 'Normal Driving',
+                    confidence REAL NOT NULL DEFAULT 1.0,
                     inside_status TEXT NOT NULL,
                     outside_traffic TEXT NOT NULL,
                     reasons_json TEXT NOT NULL,
@@ -122,6 +133,12 @@ class EventStore:
                 )
                 """
             )
+            # Automatic schema migration
+            existing_cols = {row[1] for row in conn.execute("PRAGMA table_info(events)").fetchall()}
+            if "category" not in existing_cols:
+                conn.execute("ALTER TABLE events ADD COLUMN category TEXT NOT NULL DEFAULT 'Normal Driving'")
+            if "confidence" not in existing_cols:
+                conn.execute("ALTER TABLE events ADD COLUMN confidence REAL NOT NULL DEFAULT 1.0")
             conn.commit()
 
     def _insert_event(
@@ -139,15 +156,19 @@ class EventStore:
                     created_at,
                     risk_level,
                     risk_score,
+                    category,
+                    confidence,
                     inside_status,
                     outside_traffic,
                     reasons_json
-                ) VALUES (?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     created_at,
                     fused.level,
                     fused.score,
+                    fused.category,
+                    fused.confidence,
                     inside_state.status,
                     outside_state.traffic_level,
                     reasons_json,
@@ -212,17 +233,54 @@ class EventStore:
         inside_snapshot = row["inside_snapshot"] or ""
         outside_snapshot = row["outside_snapshot"] or ""
 
+        row_keys = row.keys() if hasattr(row, "keys") else []
         return {
             "id": row["id"],
             "created_at": row["created_at"],
             "risk_level": row["risk_level"],
             "risk_score": row["risk_score"],
+            "category": row["category"] if "category" in row_keys else "Normal Driving",
+            "confidence": float(row["confidence"]) if "confidence" in row_keys else 1.0,
             "inside_status": row["inside_status"],
             "outside_traffic": row["outside_traffic"],
             "reasons": reasons,
             "inside_snapshot_url": self._snapshot_url(inside_snapshot),
             "outside_snapshot_url": self._snapshot_url(outside_snapshot),
         }
+
+    def export_csv(
+        self,
+        risk_level: str | None = None,
+        category: str | None = None,
+        search: str | None = None,
+    ) -> str:
+        events = self.fetch_events(limit=5000, risk_level=risk_level, category=category, search=search)
+        output = io.StringIO()
+        writer = csv.writer(output)
+        writer.writerow([
+            "Event ID",
+            "Timestamp",
+            "Risk Level",
+            "Risk Score",
+            "Category",
+            "Confidence",
+            "Inside Status",
+            "Outside Traffic",
+            "Reasons",
+        ])
+        for event in events:
+            writer.writerow([
+                event["id"],
+                event["created_at"],
+                event["risk_level"],
+                event["risk_score"],
+                event.get("category", "Normal Driving"),
+                event.get("confidence", 1.0),
+                event["inside_status"],
+                event["outside_traffic"],
+                " | ".join(event.get("reasons", [])),
+            ])
+        return output.getvalue()
 
     @staticmethod
     def _placeholder_snapshot() -> str:

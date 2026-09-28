@@ -68,9 +68,18 @@ class DualStreamService:
         self,
         limit: int = 10,
         risk_level: str | None = None,
+        category: str | None = None,
         search: str | None = None,
     ) -> list[dict]:
-        return self._event_store.fetch_events(limit=limit, risk_level=risk_level, search=search)
+        return self._event_store.fetch_events(limit=limit, risk_level=risk_level, category=category, search=search)
+
+    def export_events_csv(
+        self,
+        risk_level: str | None = None,
+        category: str | None = None,
+        search: str | None = None,
+    ) -> str:
+        return self._event_store.export_csv(risk_level=risk_level, category=category, search=search)
 
     def get_input_config(self) -> dict:
         with self._lock:

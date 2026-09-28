@@ -24,6 +24,7 @@
             <a class="nav-link active" href="/">Dashboard</a>
             <a class="nav-link" href="/incidents">Incidents</a>
           </nav>
+          <button id="voiceToggleBtn" class="pill" type="button" style="cursor:pointer; background:#1e293b; color:#e2e8f0; border:1px solid #334155; font-size:12px; padding:6px 12px;" title="Toggle audible safety warnings">🔊 Voice: ON</button>
           <div class="hero-status">
             <span id="riskLevel" class="pill low">Low</span>
             <strong id="riskScore">0</strong>
@@ -113,6 +114,30 @@
               <span class="panel-label">Lane Position</span>
               <strong id="laneStatusValue">Centered</strong>
               <small id="laneStatusNote">Lane guidance</small>
+            </article>
+
+            <article class="panel metric-card">
+              <span class="panel-label">Head Pose</span>
+              <strong id="headPoseValue">Forward</strong>
+              <small id="headPoseNote">Directional gaze</small>
+            </article>
+
+            <article class="panel metric-card">
+              <span class="panel-label">PERCLOS</span>
+              <strong id="perclosValue">0.0%</strong>
+              <small>Eye closure window</small>
+            </article>
+
+            <article class="panel metric-card">
+              <span class="panel-label">Relative Speed</span>
+              <strong id="speedEstimateValue" style="font-size:14px; word-break:break-word;">Stable</strong>
+              <small>Vision-based estimate</small>
+            </article>
+
+            <article class="panel metric-card">
+              <span class="panel-label">Aggressive Risk</span>
+              <strong id="aggressiveRiskValue">0 / 100</strong>
+              <small id="aggressiveRiskNote">Weaving / maneuvers</small>
             </article>
 
             <article class="panel metric-card">
@@ -240,7 +265,10 @@
                 <span class="panel-label">Recent Alerts</span>
                 <h3>Saved High-Risk Events</h3>
               </div>
-              <a class="section-link" href="/incidents">View all</a>
+              <div>
+                <a class="section-link" href="/incidents">View all</a>
+                <a class="section-link" href="/api/events/export-csv" download="incidents.csv" style="margin-left: 10px;">Export CSV</a>
+              </div>
             </div>
             <ul id="eventsList" class="events-list"></ul>
           </section>

@@ -26,9 +26,12 @@ class InsideState:
     status: str = "Waiting"
     ear: float = 0.0
     mar: float = 0.0
+    perclos: float = 0.0
     attention_score: float = 1.0
+    head_pose_direction: str = "Unavailable"
     phone_detected: bool = False
     phone_confidence: float = 0.0
+    phone_duration_sec: float = 0.0
     yawning: bool = False
     distracted: bool = False
     seatbelt_detected: bool = False
@@ -52,8 +55,14 @@ class OutsideState:
     lane_detected: bool = False
     lane_status: str = "Unmarked"
     lane_offset: float = 0.0
+    sudden_lane_change: bool = False
+    weaving_detected: bool = False
     rapid_approach: bool = False
     approach_rate: float = 0.0
+    relative_speed_estimate: str = "Stable (vision-based estimate)"
+    speed_estimate_label: str = "Vision-based estimate"
+    aggressive_driving_score: int = 0
+    aggressive_driving_detected: bool = False
     confidence_note: str = "No frame yet"
 
 
@@ -61,6 +70,8 @@ class OutsideState:
 class FusedState:
     level: str = "Low"
     score: int = 0
+    category: str = "Normal Driving"
+    confidence: float = 1.0
     reasons: list[str] = field(default_factory=lambda: ["System starting"])
 
 

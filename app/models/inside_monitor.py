@@ -24,6 +24,7 @@ LEFT_EYE = [33, 160, 158, 133, 153, 144]
 RIGHT_EYE = [362, 385, 387, 263, 373, 380]
 MOUTH = [78, 81, 13, 308, 311, 14, 82, 87, 312, 317]
 NOSE_TIP = 1
+FOREHEAD = 10
 LEFT_CHEEK = 234
 RIGHT_CHEEK = 454
 CHIN = 152
@@ -44,6 +45,7 @@ class InsideMonitor:
         self._yawn_counter = 0
         self._distraction_counter = 0
         self._phone_counter = 0
+        self._phone_frames = 0
         self._last_phone_detected = False
         self._last_phone_confidence = 0.0
         self._last_phone_box: tuple[int, int, int, int] | None = None
@@ -55,6 +57,7 @@ class InsideMonitor:
         self._ear_history: deque[float] = deque(maxlen=window)
         self._mar_history: deque[float] = deque(maxlen=window)
         self._head_offset_history: deque[float] = deque(maxlen=window)
+        self._perclos_history: deque[float] = deque(maxlen=90)
         self._ear_baseline: float | None = None
         self._mar_baseline: float | None = None
         self._head_baseline: float | None = None
@@ -78,6 +81,7 @@ class InsideMonitor:
         self._yawn_counter = 0
         self._distraction_counter = 0
         self._phone_counter = 0
+        self._phone_frames = 0
         self._last_phone_detected = False
         self._last_phone_confidence = 0.0
         self._last_phone_box = None
@@ -88,6 +92,7 @@ class InsideMonitor:
         self._ear_history.clear()
         self._mar_history.clear()
         self._head_offset_history.clear()
+        self._perclos_history.clear()
         self._ear_baseline = None
         self._mar_baseline = None
         self._head_baseline = None
@@ -137,6 +142,34 @@ class InsideMonitor:
         if current is None:
             return value
         return current + alpha * (value - current)
+
+    @staticmethod
+    def _classify_head_pose_direction(
+        nose: tuple[int, int],
+        chin_y: int,
+        forehead_y: int,
+        left_cheek: tuple[int, int],
+        right_cheek: tuple[int, int],
+        reliable_face: bool,
+    ) -> str:
+        if not reliable_face:
+            return "Unavailable"
+
+        face_width = max(abs(right_cheek[0] - left_cheek[0]), 1)
+        mid_cheek_x = (left_cheek[0] + right_cheek[0]) / 2.0
+        yaw_ratio = (nose[0] - mid_cheek_x) / face_width
+
+        nose_to_chin = abs(chin_y - nose[1])
+        forehead_to_nose = max(abs(nose[1] - forehead_y), 1)
+        pitch_down_ratio = nose_to_chin / forehead_to_nose
+
+        if pitch_down_ratio < 0.65:
+            return "Down"
+        if yaw_ratio > 0.13:
+            return "Right"
+        elif yaw_ratio < -0.13:
+            return "Left"
+        return "Forward"
 
     def _push_smoothed_metrics(self, ear: float, mar: float, head_offset: float) -> tuple[float, float, float]:
         self._ear_history.append(ear)
@@ -399,15 +432,19 @@ class InsideMonitor:
 
         if not results.multi_face_landmarks:
             self._decay_counters(amount=2)
+            self._perclos_history.append(0.0)
             state = InsideState(
                 available=True,
                 face_detected=False,
                 status="No Face",
                 ear=0.0,
                 mar=0.0,
+                perclos=0.0,
                 attention_score=0.0,
+                head_pose_direction="Unavailable",
                 phone_detected=False,
                 phone_confidence=0.0,
+                phone_duration_sec=0.0,
                 yawning=False,
                 distracted=False,
                 seatbelt_detected=False,
@@ -467,6 +504,7 @@ class InsideMonitor:
         x1, y1 = max(min(xs), 0), max(min(ys), 0)
         x2, y2 = min(max(xs), width - 1), min(max(ys), height - 1)
         chin_y = int(face_landmarks[CHIN].y * height)
+        forehead_y = int(face_landmarks[FOREHEAD].y * height)
         face_height = max(y2 - y1, 1)
         face_width_ratio = face_width / max(width, 1)
         face_height_ratio = face_height / max(height, 1)
@@ -480,6 +518,16 @@ class InsideMonitor:
         )
         symmetry_limit = 0.65 + max(0.0, (self.settings.pose_balance_threshold - pose_balance)) * 0.9
         reliable_face = face_quality >= 0.65 and moderate_pose and eye_symmetry <= symmetry_limit
+
+        head_pose_direction = self._classify_head_pose_direction(
+            nose=nose,
+            chin_y=chin_y,
+            forehead_y=forehead_y,
+            left_cheek=left_cheek,
+            right_cheek=right_cheek,
+            reliable_face=reliable_face,
+        )
+
         ear_threshold, mar_threshold, head_threshold = self._dynamic_thresholds(
             smoothed_ear,
             smoothed_mar,
@@ -487,6 +535,10 @@ class InsideMonitor:
             pose_balance,
             reliable_face,
         )
+
+        is_closed = 1.0 if smoothed_ear < ear_threshold else 0.0
+        self._perclos_history.append(is_closed)
+        perclos = (sum(self._perclos_history) / len(self._perclos_history)) * 100.0 if self._perclos_history else 0.0
 
         relative_head_offset = max(smoothed_head_offset - (self._head_baseline or 0.0), 0.0)
         head_margin = max(head_threshold - (self._head_baseline or 0.0), 1e-6)
@@ -536,9 +588,17 @@ class InsideMonitor:
 
         phone_detected = self._phone_counter >= self.settings.phone_consec_frames
         phone_confidence = phone_confidence if phone_detected else 0.0
+        if phone_detected:
+            self._phone_frames += 1
+        else:
+            self._phone_frames = max(self._phone_frames - 2, 0)
+        phone_duration_sec = round(self._phone_frames / 25.0, 1)
+
         yawning = self._yawn_counter >= self.settings.yawn_consec_frames
-        distracted = self._distraction_counter >= self.settings.distraction_consec_frames
-        drowsy = self._drowsy_counter >= self.settings.drowsy_consec_frames
+        distracted = self._distraction_counter >= self.settings.distraction_consec_frames or (
+            reliable_face and head_pose_direction in {"Left", "Right", "Down"}
+        )
+        drowsy = self._drowsy_counter >= self.settings.drowsy_consec_frames or perclos >= 25.0
 
         seatbelt_detected = False
         seatbelt_status = "Unknown"
@@ -678,13 +738,14 @@ class InsideMonitor:
             (255, 255, 255),
             2,
         )
+        phone_txt = f"Phone: Yes ({phone_duration_sec}s)" if phone_detected else "Phone: No"
         cv2.putText(
             annotated,
-            f"Phone: {'Yes' if phone_detected else 'No'}",
+            phone_txt,
             (20, 223),
             cv2.FONT_HERSHEY_SIMPLEX,
             0.68,
-            (255, 255, 255),
+            (180, 0, 255) if phone_detected else (255, 255, 255),
             2,
         )
 
@@ -726,15 +787,39 @@ class InsideMonitor:
             2,
         )
 
+        pose_color = (0, 255, 128) if head_pose_direction == "Forward" else (0, 165, 255)
+        cv2.putText(
+            annotated,
+            f"Head: {head_pose_direction}",
+            (20, 285),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.68,
+            pose_color,
+            2,
+        )
+        perclos_color = (0, 0, 255) if perclos >= 25.0 else (255, 255, 255)
+        cv2.putText(
+            annotated,
+            f"PERCLOS: {perclos:.1f}%",
+            (20, 316),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.68,
+            perclos_color,
+            2,
+        )
+
         state = InsideState(
             available=True,
             face_detected=True,
             status=status,
             ear=round(smoothed_ear, 3),
             mar=round(smoothed_mar, 3),
+            perclos=round(perclos, 1),
             attention_score=round(attention_score, 3),
+            head_pose_direction=head_pose_direction,
             phone_detected=phone_detected,
             phone_confidence=round(phone_confidence, 3),
+            phone_duration_sec=phone_duration_sec,
             yawning=yawning,
             distracted=distracted,
             seatbelt_detected=seatbelt_detected,

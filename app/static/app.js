@@ -34,6 +34,46 @@ const insideValidationMeta = document.getElementById("insideValidationMeta");
 const outsideValidationMeta = document.getElementById("outsideValidationMeta");
 const validationWarnings = document.getElementById("validationWarnings");
 
+const headPoseValue = document.getElementById("headPoseValue");
+const headPoseNote = document.getElementById("headPoseNote");
+const perclosValue = document.getElementById("perclosValue");
+const speedEstimateValue = document.getElementById("speedEstimateValue");
+const aggressiveRiskValue = document.getElementById("aggressiveRiskValue");
+const aggressiveRiskNote = document.getElementById("aggressiveRiskNote");
+const voiceToggleBtn = document.getElementById("voiceToggleBtn");
+
+let voiceEnabled = true;
+let lastSpokenTime = 0;
+let lastSpokenReason = "";
+
+function speakAlert(text) {
+  if (!voiceEnabled || !("speechSynthesis" in window)) return;
+  const now = Date.now();
+  if (now - lastSpokenTime < 8000 && text === lastSpokenReason) return;
+  if (now - lastSpokenTime < 4500) return;
+
+  try {
+    window.speechSynthesis.cancel();
+    const utterance = new SpeechSynthesisUtterance(text);
+    utterance.rate = 1.05;
+    utterance.pitch = 1.0;
+    utterance.volume = 1.0;
+    window.speechSynthesis.speak(utterance);
+    lastSpokenTime = now;
+    lastSpokenReason = text;
+  } catch (err) {
+    console.warn("Voice speech error", err);
+  }
+}
+
+if (voiceToggleBtn) {
+  voiceToggleBtn.addEventListener("click", () => {
+    voiceEnabled = !voiceEnabled;
+    voiceToggleBtn.textContent = voiceEnabled ? "🔊 Voice: ON" : "🔇 Voice: OFF";
+    voiceToggleBtn.style.opacity = voiceEnabled ? "1" : "0.6";
+  });
+}
+
 const liveModeBtn = document.getElementById("liveModeBtn");
 const recordedModeBtn = document.getElementById("recordedModeBtn");
 const startBtn = document.getElementById("startBtn");
@@ -262,6 +302,17 @@ async function fetchState() {
   const response = await fetch("/api/state");
   const data = await response.json();
 
+  // Spoken voice warnings (P2-FR09)
+  if (data.input.enabled) {
+    if (data.fused.level === "Critical") {
+      const topReason = (data.fused.reasons && data.fused.reasons[0]) || "Critical collision or fatigue danger detected";
+      speakAlert(`Critical Warning: ${topReason}`);
+    } else if (data.fused.level === "High") {
+      const topReason = (data.fused.reasons && data.fused.reasons[0]) || "Elevated driving hazard detected";
+      speakAlert(`Warning: ${topReason}`);
+    }
+  }
+
   setRiskPill(data.fused.level);
   riskScore.textContent = data.fused.score;
   setActiveModeUI(data.input.mode);
@@ -271,14 +322,29 @@ async function fetchState() {
   setProcessingState(data.input.enabled);
   driverStatus.textContent = data.inside.status;
   const phoneLabel = data.inside.phone_detected
-    ? `Phone ${Number(data.inside.phone_confidence || 0).toFixed(2)}`
+    ? `Phone ${Number(data.inside.phone_confidence || 0).toFixed(2)} (${Number(data.inside.phone_duration_sec || 0).toFixed(1)}s)`
     : "Phone clear";
   driverNote.textContent = `${data.inside.confidence_note} | ${phoneLabel} | MAR ${Number(data.inside.mar || 0).toFixed(2)} | Attn ${Number(data.inside.attention_score || 0).toFixed(2)}`;
   earValue.textContent = Number(data.inside.ear).toFixed(2);
   phoneUsageValue.textContent = data.inside.phone_detected ? "Detected" : "Clear";
+  const pDur = Number(data.inside.phone_duration_sec || 0).toFixed(1);
   phoneUsageNote.textContent = data.inside.phone_detected
-    ? `Confidence ${Number(data.inside.phone_confidence || 0).toFixed(2)}`
+    ? `Sustained ${pDur}s (conf ${Number(data.inside.phone_confidence || 0).toFixed(2)})`
     : "No handheld phone seen";
+
+  if (headPoseValue) {
+    const pose = data.inside.head_pose_direction || "Forward";
+    headPoseValue.textContent = pose;
+    headPoseValue.style.color = pose === "Forward" ? "#10b981" : (pose === "Unavailable" ? "#94a3b8" : "#f59e0b");
+    if (headPoseNote) headPoseNote.textContent = `Gaze: ${pose}`;
+  }
+
+  if (perclosValue) {
+    const pVal = Number(data.inside.perclos || 0).toFixed(1);
+    perclosValue.textContent = `${pVal}%`;
+    perclosValue.style.color = Number(pVal) >= 25 ? "#ef4444" : "#10b981";
+  }
+
   const sbStatus = data.inside.seatbelt_status || "Unknown";
   if (seatbeltValue) {
     if (sbStatus === "Fastened") {
@@ -295,20 +361,37 @@ async function fetchState() {
       seatbeltNote.textContent = "Restraint status unconfirmed";
     }
   }
+
   const laneStatus = data.outside.lane_status || "Unmarked";
   if (laneStatusValue) {
     laneStatusValue.textContent = laneStatus;
     if (laneStatus === "Centered") {
       laneStatusValue.style.color = "#10b981";
       laneStatusNote.textContent = `Offset ${Number(data.outside.lane_offset || 0).toFixed(2)}`;
-    } else if (laneStatus.includes("Drift")) {
+    } else if (laneStatus.includes("Drift") || laneStatus.includes("Weaving") || laneStatus.includes("Sudden")) {
       laneStatusValue.style.color = "#f59e0b";
-      laneStatusNote.textContent = `Deviation ${Number(data.outside.lane_offset || 0).toFixed(2)}`;
+      laneStatusNote.textContent = `${laneStatus} (${Number(data.outside.lane_offset || 0).toFixed(2)})`;
     } else {
       laneStatusValue.style.color = "#94a3b8";
       laneStatusNote.textContent = "Road markings unconfirmed";
     }
   }
+
+  if (speedEstimateValue) {
+    speedEstimateValue.textContent = data.outside.relative_speed_estimate || "Stable";
+  }
+
+  if (aggressiveRiskValue) {
+    const aggScore = data.outside.aggressive_driving_score || 0;
+    aggressiveRiskValue.textContent = `${aggScore} / 100`;
+    aggressiveRiskValue.style.color = aggScore >= 50 ? "#ef4444" : (aggScore > 0 ? "#f59e0b" : "#10b981");
+    if (aggressiveRiskNote) {
+      aggressiveRiskNote.textContent = data.outside.weaving_detected
+        ? "Weaving active"
+        : (data.outside.sudden_lane_change ? "Sudden shift" : "Maneuvers stable");
+    }
+  }
+
   vehicleCount.textContent = data.outside.vehicle_count;
   trafficLevel.textContent = `${data.outside.traffic_level} traffic | close ${data.outside.close_vehicle_count || 0}`;
   fpsValue.textContent = `${Number(data.inside_fps).toFixed(1)} / ${Number(data.outside_fps).toFixed(1)}`;

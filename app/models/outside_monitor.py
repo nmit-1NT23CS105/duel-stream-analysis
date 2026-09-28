@@ -40,6 +40,7 @@ class OutsideMonitor:
         self._close_count_history: deque[int] = deque(maxlen=window)
         self._proximity_history: deque[float] = deque(maxlen=window)
         self._lane_offset_history: deque[float] = deque(maxlen=window)
+        self._long_lane_offset_history: deque[float] = deque(maxlen=60)
         try:
             self.model = YOLO(settings.yolo_model)
         except Exception as exc:
@@ -53,6 +54,7 @@ class OutsideMonitor:
         self._close_count_history.clear()
         self._proximity_history.clear()
         self._lane_offset_history.clear()
+        self._long_lane_offset_history.clear()
 
     @staticmethod
     def _mean_int(values: deque[int]) -> int:
@@ -376,7 +378,49 @@ class OutsideMonitor:
         # Lane Detection
         lane_detected, lane_status, lane_offset, corridor = self._detect_lanes(frame)
         self._lane_offset_history.append(lane_offset)
+        self._long_lane_offset_history.append(lane_offset)
         stable_lane_offset = self._mean_float(self._lane_offset_history)
+
+        sudden_lane_change = False
+        weaving_detected = False
+        if len(self._long_lane_offset_history) >= 12:
+            recent_delta = abs(self._long_lane_offset_history[-1] - self._long_lane_offset_history[-10])
+            if recent_delta >= 0.12:
+                sudden_lane_change = True
+
+            offsets = list(self._long_lane_offset_history)
+            diffs = [offsets[i] - offsets[i - 1] for i in range(1, len(offsets))]
+            sign_reversals = sum(1 for i in range(1, len(diffs)) if (diffs[i] * diffs[i - 1] < -1e-4 and abs(diffs[i]) > 0.015))
+            if sign_reversals >= 3 and max(abs(x) for x in offsets[-25:]) > 0.05:
+                weaving_detected = True
+
+        if weaving_detected:
+            lane_status = "Repeated Weaving"
+        elif sudden_lane_change:
+            lane_status = "Sudden Lane Change"
+
+        # Relative speed estimate labeled as vision-based estimate (P2-FR07)
+        speed_delta_kph = int(round(max_approach_rate * 60.0))
+        if rapid_approach:
+            relative_speed_estimate = f"+{speed_delta_kph} km/h closing (vision-based estimate)"
+        elif max_approach_rate > 0.05:
+            relative_speed_estimate = f"+{speed_delta_kph} km/h (vision-based estimate)"
+        else:
+            relative_speed_estimate = "Stable (vision-based estimate)"
+        speed_estimate_label = "Vision-based estimate"
+
+        # Aggressive driving risk calculation (P2-FR08)
+        agg_score = 0
+        if weaving_detected:
+            agg_score += 35
+        if sudden_lane_change:
+            agg_score += 30
+        if close_vehicle:
+            agg_score += 25
+        if rapid_approach:
+            agg_score += 25
+        aggressive_driving_score = min(agg_score, 100)
+        aggressive_driving_detected = aggressive_driving_score >= 50
 
         if corridor is not None:
             overlay = annotated.copy()
@@ -428,7 +472,7 @@ class OutsideMonitor:
             (255, 255, 255),
             2,
         )
-        lane_color = (0, 255, 128) if lane_status == "Centered" else ((0, 120, 255) if "Drift" in lane_status else (200, 200, 200))
+        lane_color = (0, 255, 128) if lane_status == "Centered" else ((0, 120, 255) if ("Drift" in lane_status or "Weaving" in lane_status or "Sudden" in lane_status) else (200, 200, 200))
         cv2.putText(
             annotated,
             f"Lane: {lane_status} ({stable_lane_offset:+.2f})",
@@ -448,6 +492,25 @@ class OutsideMonitor:
             approach_color,
             2,
         )
+        cv2.putText(
+            annotated,
+            f"Rel Speed: {relative_speed_estimate}",
+            (20, 198),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.60,
+            (0, 165, 255) if rapid_approach else (255, 255, 255),
+            2,
+        )
+        agg_color = (0, 0, 255) if aggressive_driving_detected else ((0, 200, 255) if aggressive_driving_score > 0 else (255, 255, 255))
+        cv2.putText(
+            annotated,
+            f"Aggressive Risk: {aggressive_driving_score}/100",
+            (20, 229),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.65,
+            agg_color,
+            2,
+        )
 
         state = OutsideState(
             available=True,
@@ -461,8 +524,14 @@ class OutsideMonitor:
             lane_detected=lane_detected,
             lane_status=lane_status,
             lane_offset=round(stable_lane_offset, 3),
+            sudden_lane_change=sudden_lane_change,
+            weaving_detected=weaving_detected,
             rapid_approach=rapid_approach,
             approach_rate=round(max_approach_rate, 3),
+            relative_speed_estimate=relative_speed_estimate,
+            speed_estimate_label=speed_estimate_label,
+            aggressive_driving_score=aggressive_driving_score,
+            aggressive_driving_detected=aggressive_driving_detected,
             confidence_note=f"{class_summary} | Lane {lane_status}",
         )
         return OutsideResult(state=state, frame=annotated)

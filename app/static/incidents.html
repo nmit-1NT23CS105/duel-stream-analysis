@@ -53,6 +53,20 @@
             </label>
 
             <label class="field">
+              <span>Category</span>
+              <select id="categoryFilter" class="select-field">
+                <option value="">All Categories</option>
+                <option value="Fatigue">Fatigue</option>
+                <option value="Distraction">Distraction</option>
+                <option value="Phone Use">Phone Use</option>
+                <option value="Aggressive Driving">Aggressive Driving</option>
+                <option value="Lane Departure">Lane Departure</option>
+                <option value="Tailgating">Tailgating</option>
+                <option value="Seatbelt Violation">Seatbelt Violation</option>
+              </select>
+            </label>
+
+            <label class="field">
               <span>Limit</span>
               <select id="limitFilter" class="select-field">
                 <option value="8">8</option>
@@ -65,6 +79,7 @@
             <div class="incident-toolbar-actions">
               <button id="searchBtn" class="apply-btn" type="button">Search</button>
               <button id="clearBtn" class="mode-btn" type="button">Clear</button>
+              <a id="exportCsvBtn" class="mode-btn" href="/api/events/export-csv" download="incidents.csv" style="text-decoration:none; display:inline-flex; align-items:center; justify-content:center;">Export CSV</a>
             </div>
           </div>
         </article>

@@ -87,6 +87,7 @@ async def update_input_config(payload: InputConfigPayload) -> JSONResponse:
 async def get_events(
     limit: int = 8,
     risk_level: str | None = None,
+    category: str | None = None,
     search: str | None = None,
 ) -> JSONResponse:
     return JSONResponse(
@@ -94,9 +95,28 @@ async def get_events(
             "events": service.get_recent_events(
                 limit=limit,
                 risk_level=risk_level,
+                category=category,
                 search=search,
             )
         }
+    )
+
+
+@app.get("/api/events/export-csv")
+async def export_events_csv(
+    risk_level: str | None = None,
+    category: str | None = None,
+    search: str | None = None,
+) -> PlainTextResponse:
+    csv_data = service.export_events_csv(
+        risk_level=risk_level,
+        category=category,
+        search=search,
+    )
+    return PlainTextResponse(
+        csv_data,
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=incidents_export.csv"},
     )
 
 

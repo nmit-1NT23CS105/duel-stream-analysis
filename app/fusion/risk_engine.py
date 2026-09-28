@@ -33,12 +33,12 @@ class RiskEngine:
         if not inside.available:
             reasons.append("Inside stream unavailable")
         elif inside.status == "Fatigue Risk":
-            score += 70
+            score += 46
             reasons.append(
                 f"Fatigue risk: EAR {inside.ear:.2f}, MAR {inside.mar:.2f}, attention {inside.attention_score:.2f}"
             )
         elif inside.status == "Drowsy":
-            score += 52
+            score += 48
             reasons.append(f"Low EAR detected ({inside.ear:.2f})")
         elif inside.status == "Distracted":
             score += 34
@@ -88,6 +88,14 @@ class RiskEngine:
             score += 18
             reasons.append(f"Vehicle lane departure detected ({outside.lane_status})")
 
+        if outside.weaving_detected:
+            score += 30
+            reasons.append("Aggressive weaving detected across road lanes")
+
+        if outside.sudden_lane_change:
+            score += 20
+            reasons.append("Abrupt lateral shift / sudden lane change detected")
+
         if outside.rapid_approach:
             score += 24
             reasons.append(f"Front vehicle closing rapidly (+{int(outside.approach_rate*100)}%)")
@@ -95,6 +103,18 @@ class RiskEngine:
         if inside.phone_detected and inside.status != "Phone Use":
             score += 18
             reasons.append(f"Phone usage signal present ({inside.phone_confidence:.2f})")
+
+        if inside.phone_duration_sec >= 3.0:
+            score += 20
+            reasons.append(f"Sustained handheld phone use ({inside.phone_duration_sec:.1f}s)")
+
+        if inside.perclos >= 25.0:
+            score += 22
+            reasons.append(f"Elevated PERCLOS ({inside.perclos:.1f}%) indicates cumulative fatigue")
+
+        if outside.aggressive_driving_detected:
+            score += 28
+            reasons.append(f"Aggressive driving behavior score elevated ({outside.aggressive_driving_score}/100)")
 
         if inside.available and inside.face_detected and inside.seatbelt_status == "Unfastened":
             score += 15
@@ -108,12 +128,12 @@ class RiskEngine:
             score += 26
             reasons.append("HIGH RISK: Vehicle closing rapidly while driver is distracted")
 
-        if outside.lane_status in {"Drifting Left", "Drifting Right"} and inside.status in {"Drowsy", "Fatigue Risk"}:
+        if outside.lane_status in {"Drifting Left", "Drifting Right", "Repeated Weaving"} and inside.status in {"Drowsy", "Fatigue Risk"}:
             score += 25
-            reasons.append("CRITICAL: Lane drift while driver is fatigued")
-        elif outside.lane_status in {"Drifting Left", "Drifting Right"} and (inside.status == "Distracted" or inside.phone_detected):
+            reasons.append("CRITICAL: Lane departure/weaving while driver is fatigued")
+        elif outside.lane_status in {"Drifting Left", "Drifting Right", "Repeated Weaving"} and (inside.status == "Distracted" or inside.phone_detected):
             score += 22
-            reasons.append("HIGH RISK: Lane drift while driver is distracted or on phone")
+            reasons.append("HIGH RISK: Lane departure/weaving while driver is distracted or on phone")
 
         if inside.status in {"Drowsy", "Fatigue Risk"} and outside.close_vehicle:
             score += 25
@@ -143,6 +163,37 @@ class RiskEngine:
             score += 12
             reasons.append("Face missing while front vehicle is close")
 
+        # Determine incident category (P2-FR10)
+        categories: list[str] = []
+        if inside.status in {"Fatigue Risk", "Drowsy", "Yawning"} or inside.perclos >= 25.0:
+            categories.append("Fatigue")
+        if inside.phone_detected:
+            categories.append("Phone Use")
+        if inside.status == "Distracted" or inside.head_pose_direction in {"Left", "Right", "Down"}:
+            categories.append("Distraction")
+        if outside.weaving_detected or outside.sudden_lane_change or outside.aggressive_driving_detected:
+            categories.append("Aggressive Driving")
+        if outside.lane_status in {"Drifting Left", "Drifting Right"}:
+            categories.append("Lane Departure")
+        if outside.close_vehicle or outside.rapid_approach:
+            categories.append("Tailgating / Proximity")
+        if inside.available and inside.face_detected and inside.seatbelt_status == "Unfastened":
+            categories.append("Seatbelt Violation")
+
+        if len(categories) > 1:
+            category = "Multi-Risk (" + " + ".join(categories[:2]) + ")"
+        elif len(categories) == 1:
+            category = categories[0]
+        else:
+            category = "Normal Driving"
+
+        # Calculate confidence metric (P2-FR10)
+        conf = 0.85
+        if inside.available and inside.face_detected:
+            conf = min(0.95, conf + 0.10)
+        if outside.available and outside.vehicle_count > 0:
+            conf = min(0.98, conf + 0.05)
+
         raw_score = min(score, 100)
         raw_level = self._level_from_score(raw_score)
         self._score_history.append(raw_score)
@@ -161,4 +212,4 @@ class RiskEngine:
         elif smoothed_score != raw_score:
             reasons.append(f"Temporal smoothing applied ({raw_score} -> {smoothed_score})")
 
-        return FusedState(level=level, score=smoothed_score, reasons=reasons)
+        return FusedState(level=level, score=smoothed_score, category=category, confidence=round(conf, 2), reasons=reasons)

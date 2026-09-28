@@ -2,9 +2,11 @@ const incidentGrid = document.getElementById("incidentGrid");
 const incidentCount = document.getElementById("incidentCount");
 const searchInput = document.getElementById("searchInput");
 const severityFilter = document.getElementById("severityFilter");
+const categoryFilter = document.getElementById("categoryFilter");
 const limitFilter = document.getElementById("limitFilter");
 const searchBtn = document.getElementById("searchBtn");
 const clearBtn = document.getElementById("clearBtn");
+const exportCsvBtn = document.getElementById("exportCsvBtn");
 
 function severityClass(level) {
   return `pill ${String(level || "low").toLowerCase()}`;
@@ -55,10 +57,13 @@ function renderIncidents(events) {
       ? event.created_at
       : createdAt.toLocaleString();
 
+    const categoryText = event.category || "General Safety";
+    const confidencePct = Number(event.confidence || 1.0).toFixed(2);
+
     card.innerHTML = `
       <div class="incident-card-top">
         <div>
-          <span class="panel-label">Incident #${event.id}</span>
+          <span class="panel-label">Incident #${event.id} &bull; ${categoryText}</span>
           <h2>${timeLabel}</h2>
         </div>
         <div class="incident-card-score">
@@ -68,12 +73,16 @@ function renderIncidents(events) {
       </div>
       <div class="incident-summary-grid">
         <div>
-          <span class="panel-label">Inside</span>
+          <span class="panel-label">Inside State</span>
           <p>${event.inside_status}</p>
         </div>
         <div>
-          <span class="panel-label">Outside</span>
+          <span class="panel-label">Outside Traffic</span>
           <p>${event.outside_traffic}</p>
+        </div>
+        <div>
+          <span class="panel-label">AI Confidence</span>
+          <p>${confidencePct}</p>
         </div>
       </div>
       <div class="snapshot-grid">
@@ -105,9 +114,17 @@ async function fetchIncidents() {
     params.set("risk_level", severityFilter.value);
   }
 
+  if (categoryFilter && categoryFilter.value) {
+    params.set("category", categoryFilter.value);
+  }
+
   const searchValue = searchInput.value.trim();
   if (searchValue) {
     params.set("search", searchValue);
+  }
+
+  if (exportCsvBtn) {
+    exportCsvBtn.href = `/api/events/export-csv?${params.toString()}`;
   }
 
   const response = await fetch(`/api/events?${params.toString()}`);
@@ -118,6 +135,7 @@ async function fetchIncidents() {
 function clearFilters() {
   searchInput.value = "";
   severityFilter.value = "All";
+  if (categoryFilter) categoryFilter.value = "";
   limitFilter.value = "24";
   fetchIncidents().catch((error) => console.error("Incident refresh failed", error));
 }
@@ -137,6 +155,12 @@ searchInput.addEventListener("keydown", (event) => {
 severityFilter.addEventListener("change", () => {
   fetchIncidents().catch((error) => console.error("Incident refresh failed", error));
 });
+
+if (categoryFilter) {
+  categoryFilter.addEventListener("change", () => {
+    fetchIncidents().catch((error) => console.error("Incident refresh failed", error));
+  });
+}
 
 limitFilter.addEventListener("change", () => {
   fetchIncidents().catch((error) => console.error("Incident refresh failed", error));
