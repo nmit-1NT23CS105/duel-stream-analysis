@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections import deque
 from dataclasses import dataclass
+import math
 from math import dist
 import os
 
@@ -45,6 +46,10 @@ class InsideMonitor:
         self._last_phone_detected = False
         self._last_phone_confidence = 0.0
         self._last_phone_box: tuple[int, int, int, int] | None = None
+        self._seatbelt_counter = 0
+        self._seatbelt_off_counter = 0
+        self._last_seatbelt_detected = True
+        self._last_seatbelt_line: tuple[int, int, int, int] | None = None
         window = max(settings.inside_smoothing_window, 1)
         self._ear_history: deque[float] = deque(maxlen=window)
         self._mar_history: deque[float] = deque(maxlen=window)
@@ -75,6 +80,10 @@ class InsideMonitor:
         self._last_phone_detected = False
         self._last_phone_confidence = 0.0
         self._last_phone_box = None
+        self._seatbelt_counter = 0
+        self._seatbelt_off_counter = 0
+        self._last_seatbelt_detected = True
+        self._last_seatbelt_line = None
         self._ear_history.clear()
         self._mar_history.clear()
         self._head_offset_history.clear()
@@ -238,6 +247,61 @@ class InsideMonitor:
 
         return best_box is not None, best_confidence, best_box
 
+    def _detect_seatbelt(
+        self,
+        frame: np.ndarray,
+        face_box: tuple[int, int, int, int],
+    ) -> tuple[bool, str, tuple[int, int, int, int] | None, tuple[int, int, int, int]]:
+        if not self.settings.seatbelt_detection_enabled:
+            return True, "Disabled", None, (0, 0, 0, 0)
+
+        x1, y1, x2, y2 = face_box
+        height, width = frame.shape[:2]
+        face_width = max(x2 - x1, 1)
+        face_height = max(y2 - y1, 1)
+
+        torso_top = min(y2 + int(face_height * 0.15), height - 1)
+        torso_bottom = min(y2 + int(face_height * 2.8), height - 1)
+        torso_left = max(0, x1 - int(face_width * 1.0))
+        torso_right = min(width - 1, x2 + int(face_width * 1.0))
+        torso_box = (torso_left, torso_top, torso_right, torso_bottom)
+
+        if torso_bottom - torso_top < 40 or torso_right - torso_left < 40:
+            return True, "Unknown", None, torso_box
+
+        torso_roi = frame[torso_top:torso_bottom, torso_left:torso_right]
+        gray = cv2.cvtColor(torso_roi, cv2.COLOR_BGR2GRAY)
+        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+        enhanced = clahe.apply(gray)
+        edges = cv2.Canny(enhanced, 50, 150)
+
+        lines = cv2.HoughLinesP(
+            edges,
+            1,
+            np.pi / 180,
+            threshold=38,
+            minLineLength=self.settings.seatbelt_min_line_length,
+            maxLineGap=25,
+        )
+
+        best_line = None
+        max_len = 0.0
+        if lines is not None:
+            for line in lines:
+                lx1, ly1, lx2, ly2 = line[0]
+                dx = lx2 - lx1
+                dy = ly2 - ly1
+                angle = abs(math.atan2(dy, dx) * 180.0 / math.pi)
+                if self.settings.seatbelt_min_angle <= angle <= self.settings.seatbelt_max_angle:
+                    line_len = math.hypot(dx, dy)
+                    if line_len > max_len:
+                        max_len = line_len
+                        best_line = (lx1 + torso_left, ly1 + torso_top, lx2 + torso_left, ly2 + torso_top)
+
+        detected = best_line is not None and max_len >= self.settings.seatbelt_min_line_length
+        status = "Fastened" if detected else "Unfastened"
+        return detected, status, best_line, torso_box
+
     def analyze(self, frame: np.ndarray) -> InsideResult:
         self._frame_index += 1
         annotated = frame.copy()
@@ -258,6 +322,8 @@ class InsideMonitor:
                 phone_confidence=0.0,
                 yawning=False,
                 distracted=False,
+                seatbelt_detected=True,
+                seatbelt_status="Unknown",
                 drowsy_frames=0,
                 yawn_frames=0,
                 distraction_frames=0,
@@ -385,6 +451,33 @@ class InsideMonitor:
         distracted = self._distraction_counter >= self.settings.distraction_consec_frames
         drowsy = self._drowsy_counter >= self.settings.drowsy_consec_frames
 
+        seatbelt_detected = True
+        seatbelt_status = "Fastened"
+        seatbelt_line = None
+        torso_box = None
+        if reliable_face and self.settings.seatbelt_detection_enabled:
+            sb_detected, sb_status, sb_line, sb_torso = self._detect_seatbelt(frame, (x1, y1, x2, y2))
+            torso_box = sb_torso
+            if sb_detected:
+                self._seatbelt_counter += 1
+                self._seatbelt_off_counter = max(self._seatbelt_off_counter - 1, 0)
+                self._last_seatbelt_line = sb_line
+            else:
+                self._seatbelt_off_counter += 1
+                self._seatbelt_counter = max(self._seatbelt_counter - 1, 0)
+
+            if self._seatbelt_counter >= self.settings.seatbelt_consec_frames:
+                self._last_seatbelt_detected = True
+            elif self._seatbelt_off_counter >= self.settings.seatbelt_consec_frames:
+                self._last_seatbelt_detected = False
+
+            seatbelt_detected = self._last_seatbelt_detected
+            seatbelt_status = "Fastened" if seatbelt_detected else "Unfastened"
+            seatbelt_line = self._last_seatbelt_line if seatbelt_detected else None
+        else:
+            seatbelt_detected = True
+            seatbelt_status = "Unknown"
+
         if not reliable_face:
             status = "Monitoring"
             color = (255, 191, 0)
@@ -506,6 +599,34 @@ class InsideMonitor:
             2,
         )
 
+        if reliable_face and self.settings.seatbelt_detection_enabled:
+            if seatbelt_detected and seatbelt_line is not None:
+                sx1, sy1, sx2, sy2 = seatbelt_line
+                cv2.line(annotated, (sx1, sy1), (sx2, sy2), (0, 255, 128), 3)
+            elif not seatbelt_detected and torso_box is not None:
+                tx1, ty1, tx2, ty2 = torso_box
+                cv2.rectangle(annotated, (tx1, ty1), (tx2, ty2), (0, 0, 255), 2)
+                cv2.putText(
+                    annotated,
+                    "Seatbelt Missing",
+                    (tx1, max(ty1 - 8, 20)),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.6,
+                    (0, 0, 255),
+                    2,
+                )
+
+        sb_color = (0, 255, 128) if seatbelt_detected else (0, 0, 255)
+        cv2.putText(
+            annotated,
+            f"Seatbelt: {seatbelt_status}",
+            (20, 254),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.68,
+            sb_color,
+            2,
+        )
+
         state = InsideState(
             available=True,
             face_detected=True,
@@ -517,6 +638,8 @@ class InsideMonitor:
             phone_confidence=round(phone_confidence, 3),
             yawning=yawning,
             distracted=distracted,
+            seatbelt_detected=seatbelt_detected,
+            seatbelt_status=seatbelt_status,
             drowsy_frames=self._drowsy_counter,
             yawn_frames=self._yawn_counter,
             distraction_frames=self._distraction_counter,

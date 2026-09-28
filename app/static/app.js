@@ -7,6 +7,8 @@ const driverNote = document.getElementById("driverNote");
 const earValue = document.getElementById("earValue");
 const phoneUsageValue = document.getElementById("phoneUsageValue");
 const phoneUsageNote = document.getElementById("phoneUsageNote");
+const seatbeltValue = document.getElementById("seatbeltValue");
+const seatbeltNote = document.getElementById("seatbeltNote");
 const vehicleCount = document.getElementById("vehicleCount");
 const trafficLevel = document.getElementById("trafficLevel");
 const fpsValue = document.getElementById("fpsValue");
@@ -275,6 +277,20 @@ async function fetchState() {
   phoneUsageNote.textContent = data.inside.phone_detected
     ? `Confidence ${Number(data.inside.phone_confidence || 0).toFixed(2)}`
     : "No handheld phone seen";
+  const sbStatus = data.inside.seatbelt_status || "Unknown";
+  if (seatbeltValue) {
+    seatbeltValue.textContent = sbStatus;
+    if (sbStatus === "Fastened") {
+      seatbeltValue.style.color = "#10b981";
+      seatbeltNote.textContent = "Safety restraint fastened";
+    } else if (sbStatus === "Unfastened") {
+      seatbeltValue.style.color = "#ef4444";
+      seatbeltNote.textContent = "Seatbelt NOT fastened";
+    } else {
+      seatbeltValue.style.color = "#94a3b8";
+      seatbeltNote.textContent = "Restraint status unconfirmed";
+    }
+  }
   vehicleCount.textContent = data.outside.vehicle_count;
   trafficLevel.textContent = `${data.outside.traffic_level} traffic | close ${data.outside.close_vehicle_count || 0}`;
   fpsValue.textContent = `${Number(data.inside_fps).toFixed(1)} / ${Number(data.outside_fps).toFixed(1)}`;

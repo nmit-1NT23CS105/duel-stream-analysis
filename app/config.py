@@ -112,6 +112,11 @@ class Settings:
     inside_phone_detection_interval: int = int(os.getenv("INSIDE_PHONE_DETECTION_INTERVAL", "3"))
     inside_phone_min_box_area: int = int(os.getenv("INSIDE_PHONE_MIN_BOX_AREA", "320"))
     phone_consec_frames: int = int(os.getenv("PHONE_CONSEC_FRAMES", "2"))
+    seatbelt_detection_enabled: bool = os.getenv("SEATBELT_DETECTION_ENABLED", "true").lower() == "true"
+    seatbelt_consec_frames: int = int(os.getenv("SEATBELT_CONSEC_FRAMES", "3"))
+    seatbelt_min_line_length: int = int(os.getenv("SEATBELT_MIN_LINE_LENGTH", "50"))
+    seatbelt_min_angle: float = float(os.getenv("SEATBELT_MIN_ANGLE", "25.0"))
+    seatbelt_max_angle: float = float(os.getenv("SEATBELT_MAX_ANGLE", "75.0"))
     inside_confidence_floor: float = float(os.getenv("INSIDE_CONFIDENCE_FLOOR", "0.18"))
     outside_confidence_floor: float = float(os.getenv("OUTSIDE_CONFIDENCE_FLOOR", "0.35"))
     fusion_low_confidence_threshold: float = float(os.getenv("FUSION_LOW_CONFIDENCE_THRESHOLD", "0.45"))

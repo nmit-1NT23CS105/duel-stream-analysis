@@ -88,6 +88,10 @@ class RiskEngine:
             score += 18
             reasons.append(f"Phone usage signal present ({inside.phone_confidence:.2f})")
 
+        if inside.available and inside.face_detected and inside.seatbelt_status == "Unfastened":
+            score += 15
+            reasons.append("Driver seatbelt is not fastened")
+
         if inside.status in {"Drowsy", "Fatigue Risk"} and outside.close_vehicle:
             score += 25
             reasons.append("Fatigued driver with close front vehicle")
@@ -97,6 +101,9 @@ class RiskEngine:
         elif inside.status == "Distracted" and outside.close_vehicle:
             score += 18
             reasons.append("Distracted driver with close front vehicle")
+        elif inside.seatbelt_status == "Unfastened" and outside.close_vehicle:
+            score += 15
+            reasons.append("Unfastened seatbelt with close vehicle ahead")
         elif inside.status == "Yawning" and outside.vehicle_count >= 4:
             score += 10
             reasons.append("Yawning driver in active traffic")
@@ -106,6 +113,9 @@ class RiskEngine:
         elif inside.status == "Distracted" and outside.vehicle_count >= 4:
             score += 10
             reasons.append("Distracted driver in active traffic")
+        elif inside.seatbelt_status == "Unfastened" and outside.vehicle_count >= 4:
+            score += 10
+            reasons.append("Unfastened seatbelt in active traffic")
         elif inside.status == "No Face" and outside.close_vehicle:
             score += 12
             reasons.append("Face missing while front vehicle is close")
