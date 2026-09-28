@@ -131,7 +131,7 @@ class RiskEngine:
             score += 10
             reasons.append("Yawning driver in active traffic")
         elif inside.phone_detected and outside.vehicle_count >= 4:
-            score += 12
+            score += 22
             reasons.append("Phone use detected in active traffic")
         elif inside.status == "Distracted" and outside.vehicle_count >= 4:
             score += 10
