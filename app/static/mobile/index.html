@@ -1,0 +1,288 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <meta name="theme-color" content="#0d1117">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="DriveGuardian">
+  <title>DriveGuardian - Driver Safety In-Car Companion</title>
+  
+  <link rel="manifest" href="/static/mobile/manifest.json">
+  <link rel="apple-touch-icon" href="/static/mobile/icon-192.png">
+  <link rel="stylesheet" href="/static/mobile/styles.css">
+</head>
+<body>
+
+  <!-- Emergency Flash Banner -->
+  <div id="emergency-banner" class="emergency-banner">
+    <span>⚠️</span>
+    <span id="emergency-text">HIGH RISK DETECTED</span>
+  </div>
+
+  <!-- Mobile In-Car Header -->
+  <header class="mobile-header">
+    <div class="brand-wrapper">
+      <div class="brand-icon">🚗</div>
+      <div>
+        <div class="brand-title">DriveGuardian</div>
+        <div class="brand-sub">In-Car Driver Companion</div>
+      </div>
+    </div>
+    <div class="header-actions">
+      <div id="conn-status" class="conn-pill">
+        <span class="conn-dot"></span> Live
+      </div>
+      <button id="btn-voice-toggle" class="icon-btn active" title="Toggle Voice Alerts">🔊</button>
+      <button id="btn-fullscreen-toggle" class="icon-btn" title="Toggle Fullscreen">⛶</button>
+    </div>
+  </header>
+
+  <!-- Main Container / Tab Content -->
+  <main class="main-container">
+
+    <!-- TAB 1: COCKPIT DASHBOARD -->
+    <section id="tab-dashboard" class="tab-pane active">
+      
+      <!-- Primary Glanceable Risk Card -->
+      <div id="risk-cockpit-card" class="risk-cockpit-card risk-low">
+        <div class="cockpit-top-row">
+          <span class="cockpit-label">Current Risk Level</span>
+          <span id="cockpit-confidence" class="confidence-tag">95% AI Conf</span>
+        </div>
+        <div class="cockpit-status-display">
+          <div>
+            <div id="cockpit-risk-level" class="level-text">LOW</div>
+            <div id="cockpit-category" style="font-size: 0.85rem; color: var(--text-muted); font-weight: 600; margin-top: 4px;">Normal Driving</div>
+          </div>
+          <div class="score-badge-circle">
+            <span id="cockpit-score-val" class="score-val">0</span>
+            <span class="score-denom">/100</span>
+          </div>
+        </div>
+        <div id="cockpit-hazard-msg" class="cockpit-hazard-msg">
+          <span class="hazard-icon">🛡️</span>
+          <span>All driving indicators within safe normal limits.</span>
+        </div>
+      </div>
+
+      <!-- Quick Control Action Bar -->
+      <div class="quick-control-bar">
+        <button id="btn-ctrl-start" class="ctrl-btn btn-primary">
+          <span>▶</span> Start Monitor
+        </button>
+        <button id="btn-ctrl-stop" class="ctrl-btn btn-stop">
+          <span>⏹</span> Stop
+        </button>
+      </div>
+
+      <!-- Driver Vitals & Telemetry Grid -->
+      <div class="metrics-section-title">
+        <span>Driver Telemetry</span>
+        <span style="font-size: 0.72rem; color: var(--accent-blue);">Real-Time</span>
+      </div>
+
+      <div class="telemetry-grid">
+        
+        <!-- Attention & Head Pose -->
+        <div class="telem-card">
+          <div class="telem-header">
+            <span class="telem-title">Attention</span>
+            <span id="telem-head-icon" class="telem-icon">⬆️</span>
+          </div>
+          <div class="telem-body">
+            <div id="telem-head-direction" class="telem-val">Forward</div>
+            <div id="telem-attention-score" class="telem-sub">100% Attentive</div>
+            <div class="mini-bar-track">
+              <div id="telem-attention-bar" class="mini-bar-fill" style="width: 100%;"></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Fatigue & PERCLOS -->
+        <div class="telem-card">
+          <div class="telem-header">
+            <span class="telem-title">PERCLOS</span>
+            <span class="telem-icon">👁️</span>
+          </div>
+          <div class="telem-body">
+            <div id="telem-perclos-val" class="telem-val">0.0%</div>
+            <div id="telem-fatigue-sub" class="telem-sub">EAR: 0.32 | MAR: 0.05</div>
+            <div class="mini-bar-track">
+              <div id="telem-perclos-bar" class="mini-bar-fill" style="width: 5%;"></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Phone Distraction -->
+        <div class="telem-card">
+          <div class="telem-header">
+            <span class="telem-title">Phone Use</span>
+            <span class="telem-icon">📱</span>
+          </div>
+          <div class="telem-body">
+            <div id="telem-phone-val" class="telem-val" style="color: var(--risk-low);">None</div>
+            <div id="telem-phone-sub" class="telem-sub">Hands free</div>
+          </div>
+        </div>
+
+        <!-- Seatbelt Status -->
+        <div class="telem-card">
+          <div class="telem-header">
+            <span class="telem-title">Seatbelt</span>
+            <span class="telem-icon">🛡️</span>
+          </div>
+          <div class="telem-body" style="justify-content: center; align-items: flex-start;">
+            <div id="telem-seatbelt-badge" class="badge-seatbelt fastened">WORN (FASTENED)</div>
+            <div class="telem-sub" style="margin-top: 4px;">Restraint secured</div>
+          </div>
+        </div>
+
+        <!-- Relative Closing Speed -->
+        <div class="telem-card">
+          <div class="telem-header">
+            <span class="telem-title">Relative Speed</span>
+            <span class="telem-icon">🏎️</span>
+          </div>
+          <div class="telem-body">
+            <div id="telem-speed-val" class="telem-val">Stable Pace</div>
+            <div id="telem-speed-sub" class="telem-sub">Vision estimate</div>
+          </div>
+        </div>
+
+        <!-- Road & Aggressive Score -->
+        <div class="telem-card">
+          <div class="telem-header">
+            <span class="telem-title">Aggressive Risk</span>
+            <span class="telem-icon">⚡</span>
+          </div>
+          <div class="telem-body">
+            <div id="telem-aggressive-val" class="telem-val">0/100</div>
+            <div id="telem-lane-sub" class="telem-sub">Lane: Centered</div>
+            <div class="mini-bar-track">
+              <div id="telem-aggressive-bar" class="mini-bar-fill" style="width: 0%;"></div>
+            </div>
+          </div>
+        </div>
+
+      </div>
+
+    </section>
+
+    <!-- TAB 2: LIVE CAMERAS -->
+    <section id="tab-cameras" class="tab-pane">
+      <div class="streams-wrapper">
+        <div class="cam-stream-card">
+          <div class="cam-stream-header">
+            <span class="cam-title"><span>👤</span> Inside Driver Feed</span>
+            <span class="cam-live-indicator">LIVE</span>
+          </div>
+          <div class="cam-img-frame">
+            <img id="stream-inside" src="/api/stream/inside" alt="Inside Stream" loading="eager">
+          </div>
+        </div>
+
+        <div class="cam-stream-card">
+          <div class="cam-stream-header">
+            <span class="cam-title"><span>🛣️</span> Outside Road Feed</span>
+            <span class="cam-live-indicator">LIVE</span>
+          </div>
+          <div class="cam-img-frame">
+            <img id="stream-outside" src="/api/stream/outside" alt="Outside Stream" loading="eager">
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- TAB 3: INCIDENTS HISTORY -->
+    <section id="tab-incidents" class="tab-pane">
+      <div class="incidents-header-actions">
+        <select id="mobile-filter-risk" class="mobile-filter-select" onchange="loadMobileIncidents()">
+          <option value="">All Severity</option>
+          <option value="Critical">Critical</option>
+          <option value="High">High</option>
+          <option value="Medium">Medium</option>
+          <option value="Low">Low</option>
+        </select>
+        <select id="mobile-filter-category" class="mobile-filter-select" onchange="loadMobileIncidents()">
+          <option value="">All Categories</option>
+          <option value="Fatigue">Fatigue</option>
+          <option value="Phone Use">Phone Use</option>
+          <option value="Distraction">Distraction</option>
+          <option value="Aggressive Driving">Aggressive Driving</option>
+          <option value="Lane Departure">Lane Departure</option>
+          <option value="Tailgating / Proximity">Tailgating</option>
+          <option value="Seatbelt Violation">Seatbelt</option>
+        </select>
+      </div>
+
+      <div id="mobile-incidents-list">
+        <!-- Rendered dynamically -->
+      </div>
+    </section>
+
+    <!-- TAB 4: SETTINGS & COMPANION CONFIG -->
+    <section id="tab-settings" class="tab-pane">
+      
+      <div class="settings-group">
+        <div class="settings-row">
+          <div class="settings-info">
+            <div class="settings-title">Voice Alerts</div>
+            <div class="settings-desc">Spoken speech warnings for High & Critical risks</div>
+          </div>
+          <label class="toggle-switch">
+            <input type="checkbox" id="setting-voice" checked>
+            <span class="toggle-slider"></span>
+          </label>
+        </div>
+
+        <div class="settings-row">
+          <div class="settings-info">
+            <div class="settings-title">Haptic Feedback</div>
+            <div class="settings-desc">Vibrate phone upon detecting immediate hazards</div>
+          </div>
+          <label class="toggle-switch">
+            <input type="checkbox" id="setting-vibration" checked>
+            <span class="toggle-slider"></span>
+          </label>
+        </div>
+      </div>
+
+      <div class="settings-group">
+        <div class="settings-title" style="margin-bottom: 8px;">Desktop Portal</div>
+        <p style="font-size: 0.78rem; color: var(--text-muted); line-height: 1.4; margin-bottom: 12px;">
+          To access the desktop multi-panel dashboard and video uploader, navigate to the main workstation view.
+        </p>
+        <a href="/" style="display: block; text-align: center; padding: 12px; border-radius: var(--radius-md); background: var(--bg-elevated); color: var(--accent-blue); text-decoration: none; font-weight: 600; font-size: 0.88rem; border: 1px solid var(--border-color);">
+          🖥️ Open Desktop Dashboard
+        </a>
+      </div>
+
+    </section>
+
+  </main>
+
+  <!-- Bottom Navigation Bar -->
+  <nav class="bottom-nav-bar">
+    <button class="nav-item active" data-tab="dashboard">
+      <span class="nav-icon">🛡️</span>
+      <span class="nav-label">Cockpit</span>
+    </button>
+    <button class="nav-item" data-tab="cameras">
+      <span class="nav-icon">📷</span>
+      <span class="nav-label">Cameras</span>
+    </button>
+    <button class="nav-item" data-tab="incidents">
+      <span class="nav-icon">📋</span>
+      <span class="nav-label">Incidents</span>
+    </button>
+    <button class="nav-item" data-tab="settings">
+      <span class="nav-icon">⚙️</span>
+      <span class="nav-label">Settings</span>
+    </button>
+  </nav>
+
+  <script src="/static/mobile/app.js"></script>
+</body>
+</html>

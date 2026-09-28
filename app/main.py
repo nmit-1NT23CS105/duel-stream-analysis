@@ -60,6 +60,11 @@ async def incidents_page() -> FileResponse:
     return FileResponse(static_dir / "incidents.html")
 
 
+@app.get("/mobile")
+async def mobile_page() -> FileResponse:
+    return FileResponse(static_dir / "mobile" / "index.html")
+
+
 @app.get("/api/state")
 async def get_state() -> JSONResponse:
     return JSONResponse(service.get_state())
