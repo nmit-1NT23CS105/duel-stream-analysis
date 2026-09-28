@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections import deque
 from dataclasses import dataclass
+import math
 
 import cv2
 import numpy as np
@@ -33,10 +34,12 @@ class OutsideMonitor:
         self.load_error = ""
         self._frame_index = 0
         self._track_memory: dict[int, dict[str, int]] = {}
+        self._track_area_history: dict[int, deque[float]] = {}
         window = max(settings.outside_smoothing_window, 1)
         self._vehicle_count_history: deque[int] = deque(maxlen=window)
         self._close_count_history: deque[int] = deque(maxlen=window)
         self._proximity_history: deque[float] = deque(maxlen=window)
+        self._lane_offset_history: deque[float] = deque(maxlen=window)
         try:
             self.model = YOLO(settings.yolo_model)
         except Exception as exc:
@@ -45,9 +48,11 @@ class OutsideMonitor:
     def reset(self) -> None:
         self._frame_index = 0
         self._track_memory.clear()
+        self._track_area_history.clear()
         self._vehicle_count_history.clear()
         self._close_count_history.clear()
         self._proximity_history.clear()
+        self._lane_offset_history.clear()
 
     @staticmethod
     def _mean_int(values: deque[int]) -> int:
@@ -60,6 +65,133 @@ class OutsideMonitor:
         if not values:
             return 0.0
         return sum(values) / len(values)
+
+    def _compute_approach_rate(self, track_id: int, area: float) -> float:
+        history = self._track_area_history.setdefault(track_id, deque(maxlen=5))
+        history.append(area)
+        if len(history) < 3:
+            return 0.0
+        initial = history[0]
+        if initial <= 1e-5:
+            return 0.0
+        growth_rate = (history[-1] - initial) / initial
+        return round(growth_rate, 3)
+
+    def _detect_lanes(
+        self, frame: np.ndarray
+    ) -> tuple[bool, str, float, tuple | None]:
+        if not self.settings.lane_detection_enabled:
+            return False, "Disabled", 0.0, None
+
+        height, width = frame.shape[:2]
+        roi_vertices = np.array(
+            [
+                [
+                    (int(width * 0.08), height),
+                    (int(width * 0.40), int(height * 0.58)),
+                    (int(width * 0.60), int(height * 0.58)),
+                    (int(width * 0.92), height),
+                ]
+            ],
+            dtype=np.int32,
+        )
+
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+        enhanced = clahe.apply(gray)
+        blur = cv2.GaussianBlur(enhanced, (5, 5), 0)
+        edges = cv2.Canny(blur, 45, 135)
+
+        mask = np.zeros_like(edges)
+        cv2.fillPoly(mask, roi_vertices, 255)
+        masked_edges = cv2.bitwise_and(edges, mask)
+
+        lines = cv2.HoughLinesP(
+            masked_edges,
+            1,
+            np.pi / 180,
+            threshold=32,
+            minLineLength=35,
+            maxLineGap=25,
+        )
+
+        if lines is None:
+            return False, "Unmarked", 0.0, None
+
+        left_pts = []
+        right_pts = []
+        mid_x = width // 2
+
+        for line in lines:
+            x1, y1, x2, y2 = line[0]
+            dx = x2 - x1
+            dy = y2 - y1
+            if abs(dx) < 1e-5:
+                continue
+            slope = dy / dx
+            angle = math.atan2(abs(dy), abs(dx)) * 180.0 / math.pi
+            if 22 <= angle <= 82:
+                if slope > 0 and (x1 < mid_x or x2 < mid_x + 50):
+                    left_pts.extend([(x1, y1), (x2, y2)])
+                elif slope < 0 and (x1 > mid_x - 50 or x2 > mid_x):
+                    right_pts.extend([(x1, y1), (x2, y2)])
+
+        if not left_pts and not right_pts:
+            return False, "Unmarked", 0.0, None
+
+        y_bottom = height
+        y_top = int(height * 0.65)
+
+        if len(left_pts) >= 2:
+            vx, vy, x0, y0 = cv2.fitLine(np.array(left_pts), cv2.DIST_L2, 0, 0.01, 0.01)
+            vx, vy, x0, y0 = float(vx), float(vy), float(x0), float(y0)
+            if abs(vy) > 1e-5:
+                left_bottom_x = int(x0 + (y_bottom - y0) * (vx / vy))
+                left_top_x = int(x0 + (y_top - y0) * (vx / vy))
+            else:
+                left_bottom_x = int(width * 0.20)
+                left_top_x = int(width * 0.42)
+        else:
+            left_bottom_x = int(width * 0.20)
+            left_top_x = int(width * 0.42)
+
+        if len(right_pts) >= 2:
+            vx, vy, x0, y0 = cv2.fitLine(np.array(right_pts), cv2.DIST_L2, 0, 0.01, 0.01)
+            vx, vy, x0, y0 = float(vx), float(vy), float(x0), float(y0)
+            if abs(vy) > 1e-5:
+                right_bottom_x = int(x0 + (y_bottom - y0) * (vx / vy))
+                right_top_x = int(x0 + (y_top - y0) * (vx / vy))
+            else:
+                right_bottom_x = int(width * 0.80)
+                right_top_x = int(width * 0.58)
+        else:
+            right_bottom_x = int(width * 0.80)
+            right_top_x = int(width * 0.58)
+
+        corridor = (
+            (left_bottom_x, y_bottom),
+            (left_top_x, y_top),
+            (right_top_x, y_top),
+            (right_bottom_x, y_bottom),
+        )
+
+        lane_center_x = (left_bottom_x + right_bottom_x) / 2.0
+        ego_center_x = width / 2.0
+        deviation = (ego_center_x - lane_center_x) / width
+        thresh = self.settings.lane_drift_threshold
+
+        has_both = len(left_pts) >= 2 and len(right_pts) >= 2
+        if has_both:
+            if deviation > thresh:
+                status = "Drifting Right"
+            elif deviation < -thresh:
+                status = "Drifting Left"
+            else:
+                status = "Centered"
+        else:
+            status = "Tracking"
+
+        return True, status, round(deviation, 3), corridor
 
     def _update_track_streak(self, track_id: int) -> int:
         entry = self._track_memory.get(track_id, {"streak": 0, "last_seen": -99})
@@ -144,6 +276,8 @@ class OutsideMonitor:
         active_ids: set[int] = set()
         close_vehicle = False
         close_vehicle_count = 0
+        rapid_approach = False
+        max_approach_rate = 0.0
         class_counts: dict[str, int] = {}
         proximity_score = 0.0
         edge_margin_x = int(width * self.settings.edge_ignore_ratio)
@@ -200,11 +334,23 @@ class OutsideMonitor:
                     close_vehicle = True
                     close_vehicle_count += 1
 
-                color = (0, 0, 255) if close_candidate else (0, 200, 0)
-                id_text = f"#{track_id}" if track_id is not None else "#?"
-                caption = f"{label} {id_text} {confidence:.2f}"
+                approach_rate = 0.0
+                if track_id is not None:
+                    approach_rate = self._compute_approach_rate(track_id, area_ratio)
 
-                cv2.rectangle(annotated, (x1, y1), (x2, y2), color, 2)
+                is_rapid_approach = in_zone and approach_rate >= self.settings.rapid_approach_threshold
+                if is_rapid_approach:
+                    rapid_approach = True
+                    max_approach_rate = max(max_approach_rate, approach_rate)
+
+                color = (0, 0, 255) if (close_candidate or is_rapid_approach) else (0, 200, 0)
+                id_text = f"#{track_id}" if track_id is not None else "#?"
+                if is_rapid_approach:
+                    caption = f"{label} {id_text} CLOSING FAST (+{int(approach_rate*100)}%)"
+                else:
+                    caption = f"{label} {id_text} {confidence:.2f}"
+
+                cv2.rectangle(annotated, (x1, y1), (x2, y2), color, 3 if is_rapid_approach else 2)
                 cv2.circle(annotated, (cx, cy), 4, color, -1)
                 cv2.putText(
                     annotated,
@@ -226,6 +372,21 @@ class OutsideMonitor:
         stable_close_count = self._mean_int(self._close_count_history)
         stable_proximity = self._mean_float(self._proximity_history)
         close_vehicle = stable_close_count > 0
+
+        # Lane Detection
+        lane_detected, lane_status, lane_offset, corridor = self._detect_lanes(frame)
+        self._lane_offset_history.append(lane_offset)
+        stable_lane_offset = self._mean_float(self._lane_offset_history)
+
+        if corridor is not None:
+            overlay = annotated.copy()
+            lane_poly = np.array([corridor[0], corridor[1], corridor[2], corridor[3]], dtype=np.int32)
+            corridor_color = (0, 200, 100) if lane_status == "Centered" else (0, 80, 255)
+            cv2.fillPoly(overlay, [lane_poly], corridor_color)
+            cv2.addWeighted(overlay, 0.25, annotated, 0.75, 0, annotated)
+            border_color = (0, 255, 128) if lane_status == "Centered" else (0, 120, 255)
+            cv2.line(annotated, corridor[0], corridor[1], border_color, 2)
+            cv2.line(annotated, corridor[3], corridor[2], border_color, 2)
 
         if stable_vehicle_count >= 8:
             traffic_level = "High"
@@ -251,7 +412,7 @@ class OutsideMonitor:
         )
         cv2.putText(
             annotated,
-            f"Tracked IDs: {vehicle_count_now}",
+            f"Traffic: {traffic_level}",
             (20, 68),
             cv2.FONT_HERSHEY_SIMPLEX,
             0.75,
@@ -260,29 +421,31 @@ class OutsideMonitor:
         )
         cv2.putText(
             annotated,
-            f"Traffic: {traffic_level}",
-            (20, 101),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.75,
-            (255, 255, 255),
-            2,
-        )
-        cv2.putText(
-            annotated,
             f"Close Vehicles: {stable_close_count}",
-            (20, 134),
+            (20, 101),
             cv2.FONT_HERSHEY_SIMPLEX,
             0.72,
             (255, 255, 255),
             2,
         )
+        lane_color = (0, 255, 128) if lane_status == "Centered" else ((0, 120, 255) if "Drift" in lane_status else (200, 200, 200))
         cv2.putText(
             annotated,
-            class_summary[:75],
+            f"Lane: {lane_status} ({stable_lane_offset:+.2f})",
+            (20, 134),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.72,
+            lane_color,
+            2,
+        )
+        approach_color = (0, 0, 255) if rapid_approach else (255, 255, 255)
+        cv2.putText(
+            annotated,
+            f"Approach: {'RAPID (+' + str(int(max_approach_rate*100)) + '%)' if rapid_approach else 'Stable'}",
             (20, 167),
             cv2.FONT_HERSHEY_SIMPLEX,
-            0.62,
-            (255, 255, 255),
+            0.70,
+            approach_color,
             2,
         )
 
@@ -295,6 +458,11 @@ class OutsideMonitor:
             proximity_score=round(stable_proximity, 3),
             class_counts=class_counts,
             traffic_level=traffic_level,
-            confidence_note=class_summary,
+            lane_detected=lane_detected,
+            lane_status=lane_status,
+            lane_offset=round(stable_lane_offset, 3),
+            rapid_approach=rapid_approach,
+            approach_rate=round(max_approach_rate, 3),
+            confidence_note=f"{class_summary} | Lane {lane_status}",
         )
         return OutsideResult(state=state, frame=annotated)

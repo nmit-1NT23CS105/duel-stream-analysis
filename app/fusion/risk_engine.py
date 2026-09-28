@@ -84,6 +84,14 @@ class RiskEngine:
             score += 6
             reasons.append(f"Nearby vehicle footprint rising ({outside.proximity_score:.2f})")
 
+        if outside.lane_status in {"Drifting Left", "Drifting Right"}:
+            score += 18
+            reasons.append(f"Vehicle lane departure detected ({outside.lane_status})")
+
+        if outside.rapid_approach:
+            score += 24
+            reasons.append(f"Front vehicle closing rapidly (+{int(outside.approach_rate*100)}%)")
+
         if inside.phone_detected and inside.status != "Phone Use":
             score += 18
             reasons.append(f"Phone usage signal present ({inside.phone_confidence:.2f})")
@@ -91,6 +99,21 @@ class RiskEngine:
         if inside.available and inside.face_detected and inside.seatbelt_status == "Unfastened":
             score += 15
             reasons.append("Driver seatbelt is not fastened")
+
+        # Contextual synergy rules
+        if outside.rapid_approach and inside.status in {"Drowsy", "Fatigue Risk"}:
+            score += 30
+            reasons.append("CRITICAL: Vehicle closing rapidly while driver is fatigued")
+        elif outside.rapid_approach and (inside.status == "Distracted" or inside.phone_detected):
+            score += 26
+            reasons.append("HIGH RISK: Vehicle closing rapidly while driver is distracted")
+
+        if outside.lane_status in {"Drifting Left", "Drifting Right"} and inside.status in {"Drowsy", "Fatigue Risk"}:
+            score += 25
+            reasons.append("CRITICAL: Lane drift while driver is fatigued")
+        elif outside.lane_status in {"Drifting Left", "Drifting Right"} and (inside.status == "Distracted" or inside.phone_detected):
+            score += 22
+            reasons.append("HIGH RISK: Lane drift while driver is distracted or on phone")
 
         if inside.status in {"Drowsy", "Fatigue Risk"} and outside.close_vehicle:
             score += 25

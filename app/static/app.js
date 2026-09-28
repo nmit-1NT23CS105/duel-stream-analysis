@@ -9,6 +9,8 @@ const phoneUsageValue = document.getElementById("phoneUsageValue");
 const phoneUsageNote = document.getElementById("phoneUsageNote");
 const seatbeltValue = document.getElementById("seatbeltValue");
 const seatbeltNote = document.getElementById("seatbeltNote");
+const laneStatusValue = document.getElementById("laneStatusValue");
+const laneStatusNote = document.getElementById("laneStatusNote");
 const vehicleCount = document.getElementById("vehicleCount");
 const trafficLevel = document.getElementById("trafficLevel");
 const fpsValue = document.getElementById("fpsValue");
@@ -289,6 +291,20 @@ async function fetchState() {
     } else {
       seatbeltValue.style.color = "#94a3b8";
       seatbeltNote.textContent = "Restraint status unconfirmed";
+    }
+  }
+  const laneStatus = data.outside.lane_status || "Unmarked";
+  if (laneStatusValue) {
+    laneStatusValue.textContent = laneStatus;
+    if (laneStatus === "Centered") {
+      laneStatusValue.style.color = "#10b981";
+      laneStatusNote.textContent = `Offset ${Number(data.outside.lane_offset || 0).toFixed(2)}`;
+    } else if (laneStatus.includes("Drift")) {
+      laneStatusValue.style.color = "#f59e0b";
+      laneStatusNote.textContent = `Deviation ${Number(data.outside.lane_offset || 0).toFixed(2)}`;
+    } else {
+      laneStatusValue.style.color = "#94a3b8";
+      laneStatusNote.textContent = "Road markings unconfirmed";
     }
   }
   vehicleCount.textContent = data.outside.vehicle_count;

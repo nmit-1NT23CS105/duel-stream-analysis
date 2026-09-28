@@ -49,6 +49,11 @@ class OutsideState:
     proximity_score: float = 0.0
     class_counts: dict[str, int] = field(default_factory=dict)
     traffic_level: str = "Unknown"
+    lane_detected: bool = False
+    lane_status: str = "Unmarked"
+    lane_offset: float = 0.0
+    rapid_approach: bool = False
+    approach_rate: float = 0.0
     confidence_note: str = "No frame yet"
 
 
