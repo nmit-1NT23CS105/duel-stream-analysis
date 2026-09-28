@@ -464,18 +464,27 @@ class DualStreamService:
         if not Path(source_value).exists():
             raise ValueError(f"{stream_name.title()} video not found: {source_value}")
 
-    @classmethod
-    def _prepare_recorded_sources(cls, inside_source: str, outside_source: str) -> tuple[str, str]:
-        inside_candidate = cls._normalize_optional_recorded_source(inside_source)
-        outside_candidate = cls._normalize_optional_recorded_source(outside_source)
+    def _prepare_recorded_sources(self, inside_source: str, outside_source: str) -> tuple[str, str]:
+        inside_candidate = self._normalize_optional_recorded_source(inside_source)
+        outside_candidate = self._normalize_optional_recorded_source(outside_source)
+
+        if not inside_candidate and self._pending_uploaded_sources.get("inside"):
+            pending_inside = self._pending_uploaded_sources["inside"]
+            if Path(pending_inside).exists():
+                inside_candidate = pending_inside
+
+        if not outside_candidate and self._pending_uploaded_sources.get("outside"):
+            pending_outside = self._pending_uploaded_sources["outside"]
+            if Path(pending_outside).exists():
+                outside_candidate = pending_outside
 
         if not inside_candidate and not outside_candidate:
             raise ValueError("Upload or enter at least one inside or outside video for recorded mode.")
 
         if inside_candidate:
-            cls._validate_recorded_source(inside_candidate, "inside")
+            self._validate_recorded_source(inside_candidate, "inside")
         if outside_candidate:
-            cls._validate_recorded_source(outside_candidate, "outside")
+            self._validate_recorded_source(outside_candidate, "outside")
 
         return inside_candidate, outside_candidate
 
@@ -528,11 +537,12 @@ class DualStreamService:
     def _get_or_build_scene_validation(self, source_value: str, expected_stream: str) -> dict:
         if not source_value:
             return self._empty_scene_validation(expected_stream)
-        cached = self._validation_cache.get(source_value)
+        cache_key = f"{expected_stream}:{source_value}"
+        cached = self._validation_cache.get(cache_key)
         if cached is not None:
             return cached
         validation = self._inspect_recorded_scene(source_value, expected_stream)
-        self._validation_cache[source_value] = validation
+        self._validation_cache[cache_key] = validation
         return validation
 
     def _combine_validation_warnings(self, inside_validation: dict, outside_validation: dict) -> list[str]:
@@ -595,7 +605,7 @@ class DualStreamService:
 
             face_ratio = face_hits / sampled_frames
             vehicle_ratio = vehicle_hits / sampled_frames
-            scene, confidence = self._classify_scene(face_ratio, vehicle_ratio)
+            scene, confidence = self._classify_scene(face_ratio, vehicle_ratio, expected_stream)
 
             validation["scene"] = scene
             validation["confidence"] = round(confidence, 3)
@@ -649,15 +659,44 @@ class DualStreamService:
                 return True
         return False
 
-    def _classify_scene(self, face_ratio: float, vehicle_ratio: float) -> tuple[str, float]:
+    def _classify_scene(
+        self,
+        face_ratio: float,
+        vehicle_ratio: float,
+        expected_stream: str = "",
+    ) -> tuple[str, float]:
         face_threshold = self.settings.upload_validation_min_face_ratio
         vehicle_threshold = self.settings.upload_validation_min_vehicle_ratio
 
-        if face_ratio >= face_threshold and vehicle_ratio < vehicle_threshold * 0.6:
+        has_face = face_ratio >= face_threshold
+        has_vehicles = vehicle_ratio >= vehicle_threshold
+
+        if expected_stream == "inside":
+            # For inside cabin stream, detecting the driver's face is the primary validation signal.
+            # Even if other vehicles are visible through windows/windshield, it is still a valid cabin stream.
+            if has_face:
+                return "cabin", face_ratio
+            if has_vehicles and face_ratio < 0.2:
+                return "road", vehicle_ratio
+            if has_vehicles:
+                return "mixed", vehicle_ratio
+            return "unclear", max(face_ratio, vehicle_ratio)
+
+        if expected_stream == "outside":
+            # For outside road stream, vehicle/traffic detection is the primary validation signal.
+            if has_vehicles and not has_face:
+                return "road", vehicle_ratio
+            if has_face and face_ratio > vehicle_ratio:
+                return "cabin", face_ratio
+            if has_vehicles:
+                return "road", vehicle_ratio
+            return "unclear", max(face_ratio, vehicle_ratio)
+
+        if has_face and not has_vehicles:
             return "cabin", face_ratio
-        if vehicle_ratio >= vehicle_threshold and face_ratio < face_threshold * 0.6:
+        if has_vehicles and not has_face:
             return "road", vehicle_ratio
-        if face_ratio >= face_threshold * 0.85 and vehicle_ratio >= vehicle_threshold * 0.85:
+        if has_face and has_vehicles:
             return "mixed", max(face_ratio, vehicle_ratio)
         return "unclear", max(face_ratio, vehicle_ratio)
 
@@ -668,7 +707,7 @@ class DualStreamService:
         if expected_stream == "outside" and scene == "cabin":
             return "Outside upload appears to be cabin footage. Check whether the streams were swapped."
         if scene == "mixed":
-            return "Scene validation is mixed. Review the selected video before applying recorded mode."
+            return "Scene has mixed visual cues. Review stream assignment if unexpected."
         if scene == "unclear" and confidence < 0.2:
             return "Scene validation is low confidence. Results may depend on camera angle or lighting."
         return ""

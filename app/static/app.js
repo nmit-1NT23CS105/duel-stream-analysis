@@ -318,14 +318,15 @@ async function fetchState() {
 async function fetchInputConfig() {
   const response = await fetch("/api/input-config");
   const data = await response.json();
-  insideSourceInput.value = data.inside_source || "";
-  outsideSourceInput.value = data.outside_source || "";
-  setActiveModeUI(data.mode || "live");
-  if (!hasPendingConfig) {
+  const isEditing = document.activeElement === insideSourceInput || document.activeElement === outsideSourceInput;
+  if (!hasPendingConfig && !isEditing) {
+    insideSourceInput.value = data.inside_source || "";
+    outsideSourceInput.value = data.outside_source || "";
     setSelectedModeUI(data.mode || "live");
   }
+  setActiveModeUI(data.mode || "live");
   setProcessingState(data.enabled !== false);
-  renderValidation(data.validation, data.mode || "live");
+  renderValidation(data.validation, selectedMode);
 }
 
 async function fetchRecentEvents() {
@@ -358,10 +359,10 @@ async function applyConfig() {
   outsideSourceInput.value = data.config.outside_source;
   renderValidation(data.config.validation, data.config.mode);
   if (data.config.validation?.warnings?.length) {
-    setStatus(data.config.validation.warnings[0], false, "warn");
+    setStatus(`Mode updated. Note: ${data.config.validation.warnings[0]}`, false, "warn");
     return;
   }
-  setStatus("Input mode updated");
+  setStatus("Input mode updated successfully");
 }
 
 async function sendControl(action) {
@@ -418,6 +419,7 @@ function uploadRecording(streamName, inputElement) {
       return;
     }
 
+    const label = streamName === "inside" ? "Inside" : "Outside";
     if (streamName === "inside") {
       insideSourceInput.value = data.path;
       if (isLiveCameraIndex(outsideSourceInput.value)) {
@@ -433,9 +435,9 @@ function uploadRecording(streamName, inputElement) {
     setSelectedModeUI("recorded");
     renderValidation(data.bundle, "recorded");
     if (data.bundle?.warnings?.length) {
-      setStatus(data.bundle.warnings[0], false, "warn");
+      setStatus(`${label} video uploaded (${fileSizeMB} MB). Advisory: ${data.bundle.warnings[0]}`, false, "warn");
     } else {
-      setStatus(`${streamName} video (${fileSizeMB} MB) uploaded. Click Apply to analyze`);
+      setStatus(`${label} video (${fileSizeMB} MB) uploaded successfully. Click Apply to analyze`);
     }
   };
 
@@ -457,13 +459,25 @@ async function refresh() {
 liveModeBtn.addEventListener("click", () => {
   hasPendingConfig = true;
   setSelectedModeUI("live");
+  if (!insideSourceInput.value || !isLiveCameraIndex(insideSourceInput.value)) {
+    insideSourceInput.value = "0";
+  }
+  if (!outsideSourceInput.value || !isLiveCameraIndex(outsideSourceInput.value)) {
+    outsideSourceInput.value = "1";
+  }
   setStatus("Live mode selected. Click Apply");
 });
 
 recordedModeBtn.addEventListener("click", () => {
   hasPendingConfig = true;
   setSelectedModeUI("recorded");
-  setStatus("Recorded mode selected. Click Apply");
+  if (isLiveCameraIndex(insideSourceInput.value)) {
+    insideSourceInput.value = "";
+  }
+  if (isLiveCameraIndex(outsideSourceInput.value)) {
+    outsideSourceInput.value = "";
+  }
+  setStatus("Recorded mode selected. Choose videos and click Apply");
 });
 
 applyConfigBtn.addEventListener("click", async () => {
