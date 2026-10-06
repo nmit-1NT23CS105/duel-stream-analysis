@@ -125,6 +125,9 @@ class Settings:
     min_track_confirmations: int = int(os.getenv("MIN_TRACK_CONFIRMATIONS", "2"))
     min_close_box_area_ratio: float = float(os.getenv("MIN_CLOSE_BOX_AREA_RATIO", "0.02"))
     edge_ignore_ratio: float = float(os.getenv("EDGE_IGNORE_RATIO", "0.015"))
+    lane_detection_enabled: bool = os.getenv("LANE_DETECTION_ENABLED", "true").lower() == "true"
+    lane_drift_threshold: float = float(os.getenv("LANE_DRIFT_THRESHOLD", "0.08"))
+    rapid_approach_threshold: float = float(os.getenv("RAPID_APPROACH_THRESHOLD", "0.15"))
 
     risk_smoothing_window: int = int(os.getenv("RISK_SMOOTHING_WINDOW", "6"))
     critical_persistence_frames: int = int(os.getenv("CRITICAL_PERSISTENCE_FRAMES", "2"))

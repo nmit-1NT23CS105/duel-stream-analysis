@@ -23,3 +23,5 @@ data/*.log
 
 # OS/editor noise
 .DS_Store
+.tmp*
+*.driveupload
