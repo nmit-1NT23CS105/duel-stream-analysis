@@ -19,6 +19,7 @@ __pycache__/
 data/events/
 data/uploads/
 data/ultralytics/
+data/matplotlib_cache/
 data/*.db
 data/*.log
 

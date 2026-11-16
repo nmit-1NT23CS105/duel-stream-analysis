@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import sys
 import threading
 import time
+from dataclasses import asdict
 from pathlib import Path
 from typing import Generator
 
@@ -26,13 +28,20 @@ class DualStreamService:
                 mode="live",
                 inside_source=str(settings.inside_source),
                 outside_source=str(settings.outside_source),
-                enabled=False,
+                enabled=True,
             )
         )
         self._lock = threading.Lock()
         self._stop_event = threading.Event()
         self._inside_frame = self._placeholder_frame("Inside stream starting")
         self._outside_frame = self._placeholder_frame("Outside stream starting")
+        
+        # Pre-encoded JPEG cache and tracking for low-latency live streaming
+        self._encoded_jpegs: dict[str, bytes] = {}
+        self._frame_ids = {"inside": 0, "outside": 0}
+        self._last_client_frame_time = {"inside": 0.0, "outside": 0.0}
+        self._cache_initial_frames()
+
         self._risk_engine = RiskEngine(settings)
         self._inside_monitor = InsideMonitor(settings)
         self._outside_monitor = OutsideMonitor(settings)
@@ -44,10 +53,21 @@ class DualStreamService:
         self._validation_cache: dict[str, dict] = {}
         self.settings.upload_dir.mkdir(parents=True, exist_ok=True)
 
+    def _cache_initial_frames(self) -> None:
+        ok_in, enc_in = cv2.imencode(".jpg", self._inside_frame)
+        if ok_in:
+            self._encoded_jpegs["inside"] = enc_in.tobytes()
+        ok_out, enc_out = cv2.imencode(".jpg", self._outside_frame)
+        if ok_out:
+            self._encoded_jpegs["outside"] = enc_out.tobytes()
+
     def start(self) -> None:
         if self.state.started:
             return
         self.state.started = True
+        self._stop_event.clear()
+        with self._lock:
+            self.state.input.enabled = True
         self._threads = [
             threading.Thread(target=self._inside_loop, name="inside-loop", daemon=True),
             threading.Thread(target=self._outside_loop, name="outside-loop", daemon=True),
@@ -58,7 +78,9 @@ class DualStreamService:
     def stop(self) -> None:
         self._stop_event.set()
         for thread in self._threads:
-            thread.join(timeout=2.0)
+            thread.join(timeout=1.0)
+        self._threads.clear()
+        self.state.started = False
 
     def get_state(self) -> dict:
         with self._lock:
@@ -325,14 +347,20 @@ class DualStreamService:
         }
 
     def frame_stream(self, stream_name: str) -> Generator[bytes, None, None]:
+        last_id = -1
+        last_sent = 0.0
         while not self._stop_event.is_set():
+            now = time.perf_counter()
             with self._lock:
-                frame = self._inside_frame.copy() if stream_name == "inside" else self._outside_frame.copy()
-            success, encoded = cv2.imencode(".jpg", frame)
-            if success:
-                payload = encoded.tobytes()
+                current_id = self._frame_ids.get(stream_name, 0)
+                payload = self._encoded_jpegs.get(stream_name, b"")
+
+            # Send frame if updated, or heartbeat every 1.0s to maintain proxy connection
+            if payload and (current_id != last_id or (now - last_sent) > 1.0):
+                last_id = current_id
+                last_sent = now
                 yield b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + payload + b"\r\n"
-            time.sleep(0.05)
+            time.sleep(0.033)
 
     def ingest_client_frame(self, stream_name: str, frame_bytes: bytes) -> dict:
         """Process an incoming client-side frame (e.g. from browser webcam)."""
@@ -344,27 +372,38 @@ class DualStreamService:
         if not self.state.started:
             self.start()
 
+        now = time.perf_counter()
+        self._last_client_frame_time[stream_name] = now
+
         with self._lock:
             self.state.input.enabled = True
 
         if stream_name == "inside":
             frame = cv2.resize(frame, (self.settings.inside_width, self.settings.inside_height))
             result = self._inside_monitor.analyze(frame)
+            success, enc = cv2.imencode(".jpg", result.frame, [int(cv2.IMWRITE_JPEG_QUALITY), 80])
             with self._lock:
                 self._inside_frame = result.frame
+                if success:
+                    self._encoded_jpegs["inside"] = enc.tobytes()
+                    self._frame_ids["inside"] += 1
                 self.state.inside = result.state
                 self.state.inside_fps = 15.0
                 self._update_fused_state_locked()
-            return {"success": True, "state": result.state.model_dump()}
+            return {"success": True, "state": asdict(result.state)}
         else:
             frame = cv2.resize(frame, (self.settings.outside_width, self.settings.outside_height))
             result = self._outside_monitor.analyze(frame)
+            success, enc = cv2.imencode(".jpg", result.frame, [int(cv2.IMWRITE_JPEG_QUALITY), 80])
             with self._lock:
                 self._outside_frame = result.frame
+                if success:
+                    self._encoded_jpegs["outside"] = enc.tobytes()
+                    self._frame_ids["outside"] += 1
                 self.state.outside = result.state
                 self.state.outside_fps = 15.0
                 self._update_fused_state_locked()
-            return {"success": True, "state": result.state.model_dump()}
+            return {"success": True, "state": asdict(result.state)}
 
     def _inside_loop(self) -> None:
         self._stream_loop("inside", self.settings.inside_width, self.settings.inside_height, self._inside_monitor.analyze)
@@ -378,9 +417,18 @@ class DualStreamService:
         timer = time.perf_counter()
         active_version = -1
         last_mode = "live"
+        last_failed_open_time = 0.0
 
         while not self._stop_event.is_set():
             loop_started = time.perf_counter()
+
+            # 1. If client browser/device is actively streaming frames, pause hardware capture and yield
+            if (loop_started - self._last_client_frame_time.get(stream_name, 0.0)) < 3.0:
+                if cap is not None:
+                    cap = self._reset_capture(cap)
+                time.sleep(0.08)
+                continue
+
             with self._lock:
                 source_value = self.state.input.inside_source if stream_name == "inside" else self.state.input.outside_source
                 mode = self.state.input.mode
@@ -391,6 +439,7 @@ class DualStreamService:
                 cap = self._reset_capture(cap)
                 active_version = -1
                 stopped_frame = self._placeholder_frame(f"{stream_name.title()} stream stopped")
+                success, enc = cv2.imencode(".jpg", stopped_frame)
                 with self._lock:
                     if stream_name == "inside":
                         self._inside_frame = stopped_frame
@@ -402,6 +451,9 @@ class DualStreamService:
                         self.state.outside.available = False
                         self.state.outside.traffic_level = "Stopped"
                         self.state.outside.confidence_note = "Processing stopped"
+                    if success:
+                        self._encoded_jpegs[stream_name] = enc.tobytes()
+                        self._frame_ids[stream_name] += 1
                     self.state.inside_fps = 0.0
                     self.state.outside_fps = 0.0
                     self.state.fused.level = "Low"
@@ -414,14 +466,23 @@ class DualStreamService:
                 cap = self._reset_capture(cap)
                 active_version = version
                 last_mode = mode
+                last_failed_open_time = 0.0
 
             if mode == "recorded" and not source_value.strip():
                 cap = self._reset_capture(cap)
                 ok, frame = False, None
             else:
                 source = self._resolve_source(mode, source_value)
-                cap = self._ensure_capture(cap, source, width, height)
-                ok, frame = cap.read() if cap is not None else (False, None)
+                # Rate-limit hardware camera re-opening attempts to once every 2.5s if not opened
+                if cap is None and (loop_started - last_failed_open_time < 2.5):
+                    ok, frame = False, None
+                else:
+                    cap = self._ensure_capture(cap, source, width, height)
+                    if cap is None or not cap.isOpened():
+                        last_failed_open_time = loop_started
+                        ok, frame = False, None
+                    else:
+                        ok, frame = cap.read()
 
             if (not ok or frame is None) and mode == "recorded" and cap is not None:
                 cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
@@ -430,6 +491,7 @@ class DualStreamService:
             if not ok or frame is None:
                 fallback = self._build_unavailable_message(stream_name, mode, source_value)
                 placeholder = self._placeholder_frame(fallback)
+                success, enc = cv2.imencode(".jpg", placeholder)
                 if stream_name == "inside":
                     result_frame = placeholder
                     result_state = InsideState(
@@ -464,10 +526,14 @@ class DualStreamService:
                         self.state.outside = result_state
                         self.state.playback.outside_progress = progress
                         self.state.outside_fps = fps
+                    if success:
+                        self._encoded_jpegs[stream_name] = enc.tobytes()
+                        self._frame_ids[stream_name] += 1
                     self._update_fused_state_locked()
                 continue
 
             result = analyzer(frame)
+            success, enc = cv2.imencode(".jpg", result.frame, [int(cv2.IMWRITE_JPEG_QUALITY), 80])
             frame_count += 1
             fps, frame_count, timer = self._compute_fps(frame_count, timer)
             progress = self._capture_progress(cap) if mode == "recorded" and cap is not None else 0.0
@@ -484,6 +550,9 @@ class DualStreamService:
                     self.state.playback.outside_progress = progress
                     if fps is not None:
                         self.state.outside_fps = fps
+                if success:
+                    self._encoded_jpegs[stream_name] = enc.tobytes()
+                    self._frame_ids[stream_name] += 1
                 self._update_fused_state_locked()
 
             if mode == "recorded" and cap is not None:
@@ -512,18 +581,32 @@ class DualStreamService:
             return round(fps, 1), 0, now
         return None, frame_count, timer
 
-    @staticmethod
+    @classmethod
     def _ensure_capture(
+        cls,
         cap: cv2.VideoCapture | None,
         source: int | str,
         width: int,
         height: int,
-    ) -> cv2.VideoCapture:
+    ) -> cv2.VideoCapture | None:
         if cap is not None and cap.isOpened():
             return cap
-        cap = cv2.VideoCapture(source)
+        if cap is not None:
+            cap.release()
+            cap = None
+
+        try:
+            cap = cv2.VideoCapture(source)
+        except Exception:
+            return None
+
+        if not cap.isOpened():
+            cap.release()
+            return None
+
         cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
         cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
+        cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
         return cap
 
     @staticmethod

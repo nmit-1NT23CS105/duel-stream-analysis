@@ -84,6 +84,24 @@ async def websocket_monitoring(websocket: WebSocket):
         pass
 
 
+@app.get("/api/health")
+async def health_check() -> JSONResponse:
+    return JSONResponse(
+        {
+            "status": "ok",
+            "started": service.state.started,
+            "enabled": service.state.input.enabled,
+            "mode": service.state.input.mode,
+        }
+    )
+
+
+@app.get("/api/monitoring/snapshot")
+@app.get("/api/snapshot")
+async def get_snapshot() -> JSONResponse:
+    return JSONResponse(service.get_monitoring_snapshot())
+
+
 @app.get("/api/state")
 async def get_state() -> JSONResponse:
     return JSONResponse(service.get_state())
@@ -207,10 +225,17 @@ async def control_processing(payload: ControlPayload) -> JSONResponse:
 
 
 @app.get("/stream/{stream_name}")
+@app.get("/api/stream/{stream_name}")
 async def stream(stream_name: str):
     if stream_name not in {"inside", "outside"}:
         return PlainTextResponse("Invalid stream", status_code=404)
     return StreamingResponse(
         service.frame_stream(stream_name),
         media_type="multipart/x-mixed-replace; boundary=frame",
+        headers={
+            "Cache-Control": "no-cache, no-store, must-revalidate",
+            "Pragma": "no-cache",
+            "Expires": "0",
+            "X-Accel-Buffering": "no",
+        },
     )

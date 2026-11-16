@@ -15,30 +15,31 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Set up user with UID 1000 (standard for Hugging Face Spaces Docker SDK)
-RUN useradd -m -u 1000 user
-USER user
-ENV HOME=/home/user \
-    PATH=/home/user/.local/bin:$PATH
+# Set up non-root application user
+RUN useradd -m -u 1000 appuser
+USER appuser
+ENV HOME=/home/appuser \
+    PATH=/home/appuser/.local/bin:$PATH \
+    PORT=8000
 
-WORKDIR /home/user/app
+WORKDIR /home/appuser/app
 
 # Install lightweight PyTorch CPU wheel first for ultra-fast build
 RUN pip install --no-cache-dir --user torch torchvision --index-url https://download.pytorch.org/whl/cpu
 
 # Copy requirements and install remaining python packages
-COPY --chown=user:user requirements.txt .
+COPY --chown=appuser:appuser requirements.txt .
 RUN pip install --no-cache-dir --user -r requirements.txt
 
 # Copy application files
-COPY --chown=user:user . .
+COPY --chown=appuser:appuser . .
 
 # Ensure data directories exist and pre-cache YOLO weights for instant startup
-RUN mkdir -p data/uploads data/events/media data/ultralytics && \
+RUN mkdir -p data/uploads data/events data/ultralytics && \
     python -c "from ultralytics import YOLO; YOLO('yolov8s.pt'); YOLO('yolov8n.pt')"
 
-# Expose port 7860 (Hugging Face default)
-EXPOSE 7860
+# Expose server port
+EXPOSE 8000
 
-# Start FastAPI server directly
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "7860"]
+# Start FastAPI server
+CMD ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}"]

@@ -746,18 +746,19 @@ function setupMobileWebcam(btnId, streamName, facingMode) {
         ctx.drawImage(hiddenVideo, 0, 0, canvas.width, canvas.height);
         isSending = true;
         canvas.toBlob(async (blob) => {
-          if (blob) {
-            try {
+          try {
+            if (blob) {
               await fetch(`/api/feed-frame/${streamName}`, {
                 method: "POST",
                 body: blob,
                 headers: { "Content-Type": "image/jpeg" }
               });
-            } catch (e) {
-              console.warn("Mobile frame send error", e);
             }
+          } catch (e) {
+            console.warn("Mobile frame send error", e);
+          } finally {
+            isSending = false;
           }
-          isSending = false;
         }, "image/jpeg", 0.7);
       }, 120);
     } catch (err) {
@@ -768,6 +769,17 @@ function setupMobileWebcam(btnId, streamName, facingMode) {
   });
 }
 
+function attachMobileStreamReconnect(imgId, streamUrl) {
+  const img = document.getElementById(imgId);
+  if (!img) return;
+  img.addEventListener("error", () => {
+    console.warn(`Mobile stream dropped for ${streamUrl}. Auto-reconnecting in 1s...`);
+    setTimeout(() => {
+      img.src = `${streamUrl}?t=${Date.now()}`;
+    }, 1000);
+  });
+}
+
 // Lifecycle Init
 document.addEventListener("DOMContentLoaded", () => {
   setupTabNavigation();
@@ -775,6 +787,12 @@ document.addEventListener("DOMContentLoaded", () => {
   fetchInputConfig();
   fetchState();
   fetchRecentEvents();
+
+  attachMobileStreamReconnect("outsideStreamImg", "/stream/outside");
+  attachMobileStreamReconnect("insideStreamImg", "/stream/inside");
+
+  setInterval(fetchState, 700);
+  setInterval(fetchRecentEvents, 3500);
 
   setInterval(fetchState, 700);
   setInterval(fetchRecentEvents, 3500);

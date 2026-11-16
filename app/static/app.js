@@ -743,18 +743,19 @@ function setupBrowserWebcam(btnId, streamName, facingMode) {
         isSending = true;
         canvas.toBlob(
           async (blob) => {
-            if (blob) {
-              try {
+            try {
+              if (blob) {
                 await fetch(`/api/feed-frame/${streamName}`, {
                   method: "POST",
                   body: blob,
                   headers: { "Content-Type": "image/jpeg" },
                 });
-              } catch (e) {
-                console.warn("Client frame feed error", e);
               }
+            } catch (e) {
+              console.warn("Client frame feed error", e);
+            } finally {
+              isSending = false;
             }
-            isSending = false;
           },
           "image/jpeg",
           0.72
@@ -768,8 +769,21 @@ function setupBrowserWebcam(btnId, streamName, facingMode) {
   });
 }
 
+function attachStreamReconnect(imgId, streamUrl) {
+  const img = document.getElementById(imgId);
+  if (!img) return;
+  img.addEventListener("error", () => {
+    console.warn(`Live stream dropped for ${streamUrl}. Auto-reconnecting in 1s...`);
+    setTimeout(() => {
+      img.src = `${streamUrl}?t=${Date.now()}`;
+    }, 1000);
+  });
+}
+
 setupBrowserWebcam("insideWebcamBtn", "inside", "user");
 setupBrowserWebcam("outsideWebcamBtn", "outside", "environment");
+attachStreamReconnect("outsideStreamImg", "/stream/outside");
+attachStreamReconnect("insideStreamImg", "/stream/inside");
 
 refresh();
 initMonitoringWebSocket();
