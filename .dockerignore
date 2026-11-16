@@ -12,3 +12,7 @@ bin/
 *.docx
 *.pdf
 test_system_integrity.py
+start_tunnel.*
+start_project.*
+*.bat
+*.ps1
