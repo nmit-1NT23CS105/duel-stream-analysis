@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: dual-stream-driving-safety
+    runtime: python
+    buildCommand: pip install --upgrade pip && pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.9
+      - key: OUTSIDE_PROFILE
+        value: speed
+      - key: YOLO_DEVICE
+        value: cpu

@@ -700,6 +700,72 @@ function setupEventListeners() {
 
   if (insideSourceInput) insideSourceInput.addEventListener("input", () => { hasPendingConfig = true; });
   if (outsideSourceInput) outsideSourceInput.addEventListener("input", () => { hasPendingConfig = true; });
+
+  setupMobileWebcam("mobileInsideWebcamBtn", "inside", "user");
+  setupMobileWebcam("mobileOutsideWebcamBtn", "outside", "environment");
+}
+
+function setupMobileWebcam(btnId, streamName, facingMode) {
+  const btn = document.getElementById(btnId);
+  if (!btn) return;
+
+  let stream = null;
+  let interval = null;
+  const hiddenVideo = document.createElement("video");
+  hiddenVideo.setAttribute("playsinline", "true");
+  hiddenVideo.muted = true;
+  const canvas = document.createElement("canvas");
+  canvas.width = 640;
+  canvas.height = 480;
+  const ctx = canvas.getContext("2d");
+
+  btn.addEventListener("click", async () => {
+    if (stream) {
+      stream.getTracks().forEach((t) => t.stop());
+      stream = null;
+      if (interval) clearInterval(interval);
+      interval = null;
+      btn.innerHTML = streamName === "inside" ? "📷 Selfie Cam" : "📷 Rear Cam";
+      btn.style.background = streamName === "inside" ? "#2563eb" : "#1e293b";
+      return;
+    }
+
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({
+        video: { width: 640, height: 480, facingMode: facingMode }
+      });
+      btn.innerHTML = "⏹️ Stop";
+      btn.style.background = "#ef4444";
+
+      hiddenVideo.srcObject = stream;
+      await hiddenVideo.play();
+
+      let isSending = false;
+      interval = setInterval(() => {
+        if (isSending || !stream || hiddenVideo.readyState < hiddenVideo.HAVE_CURRENT_DATA) return;
+        ctx.drawImage(hiddenVideo, 0, 0, canvas.width, canvas.height);
+        isSending = true;
+        canvas.toBlob(async (blob) => {
+          if (blob) {
+            try {
+              await fetch(`/api/feed-frame/${streamName}`, {
+                method: "POST",
+                body: blob,
+                headers: { "Content-Type": "image/jpeg" }
+              });
+            } catch (e) {
+              console.warn("Mobile frame send error", e);
+            }
+          }
+          isSending = false;
+        }, "image/jpeg", 0.7);
+      }, 120);
+    } catch (err) {
+      alert(`Camera Error: ${err.message}`);
+      btn.innerHTML = streamName === "inside" ? "📷 Selfie Cam" : "📷 Rear Cam";
+      btn.style.background = streamName === "inside" ? "#2563eb" : "#1e293b";
+    }
+  });
 }
 
 // Lifecycle Init

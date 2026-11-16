@@ -14,7 +14,11 @@ except Exception:
 from gradio import Server
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
-from app.main import app as main_fastapi_app
+from app.main import app as main_fastapi_app, service
+
+# Ensure backend processing service is running
+if not service.state.started:
+    service.start()
 
 # 1. Initialize Gradio Server (inherits directly from FastAPI)
 app = Server(title="Dual-Stream Safety Hub")

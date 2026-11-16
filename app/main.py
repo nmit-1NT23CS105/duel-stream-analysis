@@ -180,6 +180,20 @@ async def upload_recording(stream_name: str, request: Request, filename: str = "
     )
 
 
+@app.post("/api/feed-frame/{stream_name}")
+async def feed_client_frame(stream_name: str, request: Request) -> JSONResponse:
+    if stream_name not in {"inside", "outside"}:
+        return JSONResponse({"error": "Invalid stream name. Must be 'inside' or 'outside'"}, status_code=400)
+    try:
+        frame_bytes = await request.body()
+        if not frame_bytes:
+            return JSONResponse({"error": "Empty frame payload"}, status_code=400)
+        res = service.ingest_client_frame(stream_name, frame_bytes)
+        return JSONResponse(res)
+    except Exception as exc:
+        return JSONResponse({"error": str(exc)}, status_code=500)
+
+
 @app.post("/api/control")
 async def control_processing(payload: ControlPayload) -> JSONResponse:
     action = payload.action.lower().strip()

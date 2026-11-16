@@ -334,6 +334,38 @@ class DualStreamService:
                 yield b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + payload + b"\r\n"
             time.sleep(0.05)
 
+    def ingest_client_frame(self, stream_name: str, frame_bytes: bytes) -> dict:
+        """Process an incoming client-side frame (e.g. from browser webcam)."""
+        nparr = np.frombuffer(frame_bytes, np.uint8)
+        frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+        if frame is None:
+            return {"success": False, "error": "Failed to decode frame"}
+
+        if not self.state.started:
+            self.start()
+
+        with self._lock:
+            self.state.input.enabled = True
+
+        if stream_name == "inside":
+            frame = cv2.resize(frame, (self.settings.inside_width, self.settings.inside_height))
+            result = self._inside_monitor.analyze(frame)
+            with self._lock:
+                self._inside_frame = result.frame
+                self.state.inside = result.state
+                self.state.inside_fps = 15.0
+                self._update_fused_state_locked()
+            return {"success": True, "state": result.state.model_dump()}
+        else:
+            frame = cv2.resize(frame, (self.settings.outside_width, self.settings.outside_height))
+            result = self._outside_monitor.analyze(frame)
+            with self._lock:
+                self._outside_frame = result.frame
+                self.state.outside = result.state
+                self.state.outside_fps = 15.0
+                self._update_fused_state_locked()
+            return {"success": True, "state": result.state.model_dump()}
+
     def _inside_loop(self) -> None:
         self._stream_loop("inside", self.settings.inside_width, self.settings.inside_height, self._inside_monitor.analyze)
 

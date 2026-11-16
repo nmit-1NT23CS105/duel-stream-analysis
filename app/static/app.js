@@ -700,6 +700,77 @@ outsideSourceInput.addEventListener("input", () => {
   hasPendingConfig = true;
 });
 
+// Browser Webcam Integration for Cloud & Local Access
+function setupBrowserWebcam(btnId, streamName, facingMode) {
+  const btn = document.getElementById(btnId);
+  if (!btn) return;
+
+  let stream = null;
+  let interval = null;
+  const hiddenVideo = document.createElement("video");
+  hiddenVideo.setAttribute("playsinline", "true");
+  hiddenVideo.muted = true;
+  const canvas = document.createElement("canvas");
+  canvas.width = 640;
+  canvas.height = 480;
+  const ctx = canvas.getContext("2d");
+
+  btn.addEventListener("click", async () => {
+    if (stream) {
+      stream.getTracks().forEach((track) => track.stop());
+      stream = null;
+      if (interval) clearInterval(interval);
+      interval = null;
+      btn.innerHTML = streamName === "inside" ? "📷 Browser Webcam" : "📷 Device Camera";
+      btn.style.background = streamName === "inside" ? "#2563eb" : "#1e293b";
+      return;
+    }
+
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({
+        video: { width: 640, height: 480, facingMode: facingMode },
+      });
+      btn.innerHTML = "⏹️ Stop Camera";
+      btn.style.background = "#ef4444";
+
+      hiddenVideo.srcObject = stream;
+      await hiddenVideo.play();
+
+      let isSending = false;
+      interval = setInterval(() => {
+        if (isSending || !stream || hiddenVideo.readyState < hiddenVideo.HAVE_CURRENT_DATA) return;
+        ctx.drawImage(hiddenVideo, 0, 0, canvas.width, canvas.height);
+        isSending = true;
+        canvas.toBlob(
+          async (blob) => {
+            if (blob) {
+              try {
+                await fetch(`/api/feed-frame/${streamName}`, {
+                  method: "POST",
+                  body: blob,
+                  headers: { "Content-Type": "image/jpeg" },
+                });
+              } catch (e) {
+                console.warn("Client frame feed error", e);
+              }
+            }
+            isSending = false;
+          },
+          "image/jpeg",
+          0.72
+        );
+      }, 100);
+    } catch (err) {
+      alert(`Camera Access Notice:\n${err.message}\nPlease allow camera permissions in your browser.`);
+      btn.innerHTML = streamName === "inside" ? "📷 Browser Webcam" : "📷 Device Camera";
+      btn.style.background = streamName === "inside" ? "#2563eb" : "#1e293b";
+    }
+  });
+}
+
+setupBrowserWebcam("insideWebcamBtn", "inside", "user");
+setupBrowserWebcam("outsideWebcamBtn", "outside", "environment");
+
 refresh();
 initMonitoringWebSocket();
 setInterval(refresh, 1500);
