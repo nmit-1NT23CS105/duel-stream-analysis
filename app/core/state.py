@@ -29,11 +29,17 @@ class InsideState:
     perclos: float = 0.0
     attention_score: float = 1.0
     head_pose_direction: str = "Unavailable"
+    eye_gaze_direction: str = "Forward"
     phone_detected: bool = False
     phone_confidence: float = 0.0
     phone_duration_sec: float = 0.0
+    drinking_detected: bool = False
+    secondary_distraction: str = "None"
     yawning: bool = False
     distracted: bool = False
+    microsleep_detected: bool = False
+    head_nod_detected: bool = False
+    stress_level: str = "Normal"
     seatbelt_detected: bool = False
     seatbelt_status: str = "Unknown"
     drowsy_frames: int = 0
@@ -46,6 +52,9 @@ class InsideState:
 class OutsideState:
     available: bool = False
     vehicle_count: int = 0
+    pedestrian_count: int = 0
+    cyclist_count: int = 0
+    vru_risk: bool = False
     tracked_count: int = 0
     close_vehicle: bool = False
     close_vehicle_count: int = 0
@@ -59,8 +68,17 @@ class OutsideState:
     weaving_detected: bool = False
     rapid_approach: bool = False
     approach_rate: float = 0.0
+    ttc_seconds: float = 0.0
+    ttc_warning: bool = False
     relative_speed_estimate: str = "Stable (vision-based estimate)"
     speed_estimate_label: str = "Vision-based estimate"
+    estimated_speed_kmh: float = 0.0
+    speed_limit_kmh: float = 60.0
+    overspeed_detected: bool = False
+    speed_status: str = "AVAILABLE"
+    traffic_signal: str = "NONE"
+    stop_sign_detected: bool = False
+    weather_condition: str = "Clear Daylight"
     aggressive_driving_score: int = 0
     aggressive_driving_detected: bool = False
     confidence_note: str = "No frame yet"

@@ -29,6 +29,8 @@ LEFT_CHEEK = 234
 RIGHT_CHEEK = 454
 CHIN = 152
 PHONE_CLASS_ID = 67
+BOTTLE_CLASS_ID = 39
+CUP_CLASS_ID = 40
 
 
 @dataclass(slots=True)
@@ -49,6 +51,10 @@ class InsideMonitor:
         self._last_phone_detected = False
         self._last_phone_confidence = 0.0
         self._last_phone_box: tuple[int, int, int, int] | None = None
+        self._last_drinking_detected = False
+        self._last_drinking_box: tuple[int, int, int, int] | None = None
+        self._drinking_counter = 0
+        self._microsleep_counter = 0
         self._seatbelt_counter = 0
         self._seatbelt_off_counter = 0
         self._last_seatbelt_detected = False
@@ -222,13 +228,56 @@ class InsideMonitor:
         self._distraction_counter = max(self._distraction_counter - amount, 0)
         self._phone_counter = max(self._phone_counter - amount, 0)
 
+    @staticmethod
+    def _compute_eye_gaze(
+        face_landmarks,
+        head_pose_direction: str,
+    ) -> str:
+        if head_pose_direction in {"Left", "Right"}:
+            return head_pose_direction
+        if len(face_landmarks) > 473:
+            l_outer = face_landmarks[33].x
+            l_inner = face_landmarks[133].x
+            l_iris = face_landmarks[468].x
+            r_inner = face_landmarks[362].x
+            r_outer = face_landmarks[263].x
+            r_iris = face_landmarks[473].x
+            l_span = abs(l_inner - l_outer)
+            r_span = abs(r_outer - r_inner)
+            if l_span > 1e-4 and r_span > 1e-4:
+                l_ratio = (l_iris - min(l_outer, l_inner)) / l_span
+                r_ratio = (r_iris - min(r_inner, r_outer)) / r_span
+                avg_ratio = (l_ratio + r_ratio) / 2.0
+                if avg_ratio < 0.36:
+                    return "Left"
+                elif avg_ratio > 0.64:
+                    return "Right"
+        return "Forward"
+
+    @staticmethod
+    def _compute_stress_level(
+        face_landmarks,
+        width: int,
+        height: int,
+        face_width: int,
+    ) -> str:
+        brow_l = face_landmarks[55]
+        brow_r = face_landmarks[285]
+        brow_dist = math.hypot((brow_r.x - brow_l.x) * width, (brow_r.y - brow_l.y) * height)
+        brow_ratio = brow_dist / max(face_width, 1)
+        if brow_ratio < 0.22:
+            return "Agitated"
+        elif brow_ratio < 0.28:
+            return "Elevated"
+        return "Normal"
+
     def _detect_phone(
         self,
         frame: np.ndarray,
         face_box: tuple[int, int, int, int],
-    ) -> tuple[bool, float, tuple[int, int, int, int] | None]:
+    ) -> tuple[bool, float, tuple[int, int, int, int] | None, bool, tuple[int, int, int, int] | None]:
         if self._phone_detector is None:
-            return False, 0.0, None
+            return False, 0.0, None, False, None
 
         x1, y1, x2, y2 = face_box
         height, width = frame.shape[:2]
@@ -239,6 +288,10 @@ class InsideMonitor:
         expanded_top = max(0, int(y1 - face_height * 0.2))
         expanded_bottom = min(height - 1, int(y2 + face_height * 1.8))
 
+        classes_to_detect = [PHONE_CLASS_ID]
+        if self.settings.drinking_detection_enabled:
+            classes_to_detect.extend([BOTTLE_CLASS_ID, CUP_CLASS_ID])
+
         inference = self._phone_detector.predict(
             source=frame,
             conf=self.settings.inside_phone_confidence,
@@ -247,21 +300,23 @@ class InsideMonitor:
             device=self.settings.yolo_device,
             half=self.settings.yolo_half and self.settings.yolo_device != "cpu",
             verbose=False,
-            classes=[PHONE_CLASS_ID],
+            classes=classes_to_detect,
         )
         if not inference:
-            return False, 0.0, None
+            return False, 0.0, None, False, None
 
         boxes = inference[0].boxes
         if boxes is None or len(boxes) == 0:
-            return False, 0.0, None
+            return False, 0.0, None, False, None
 
         confidences = boxes.conf.cpu().tolist() if boxes.conf is not None else [0.0] * len(boxes)
         xyxy_values = boxes.xyxy.int().cpu().tolist() if boxes.xyxy is not None else []
+        class_ids = boxes.cls.int().cpu().tolist() if boxes.cls is not None else [PHONE_CLASS_ID] * len(boxes)
 
         best_confidence = 0.0
         best_box = None
-        for confidence, (bx1, by1, bx2, by2) in zip(confidences, xyxy_values):
+        best_drink_box = None
+        for confidence, cls_id, (bx1, by1, bx2, by2) in zip(confidences, class_ids, xyxy_values):
             box_area = max((bx2 - bx1), 0) * max((by2 - by1), 0)
             if box_area < self.settings.inside_phone_min_box_area:
                 continue
@@ -275,11 +330,20 @@ class InsideMonitor:
             if not center_in_driver_zone:
                 continue
 
-            if confidence > best_confidence:
-                best_confidence = confidence
-                best_box = (bx1, by1, bx2, by2)
+            if cls_id == PHONE_CLASS_ID:
+                if confidence > best_confidence:
+                    best_confidence = confidence
+                    best_box = (bx1, by1, bx2, by2)
+            elif cls_id in {BOTTLE_CLASS_ID, CUP_CLASS_ID}:
+                best_drink_box = (bx1, by1, bx2, by2)
 
-        return best_box is not None, best_confidence, best_box
+        return (
+            best_box is not None,
+            best_confidence,
+            best_box,
+            best_drink_box is not None,
+            best_drink_box,
+        )
 
     @staticmethod
     def _evaluate_line_strap(
@@ -442,11 +506,17 @@ class InsideMonitor:
                 perclos=0.0,
                 attention_score=0.0,
                 head_pose_direction="Unavailable",
+                eye_gaze_direction="Unavailable",
                 phone_detected=False,
                 phone_confidence=0.0,
                 phone_duration_sec=0.0,
+                drinking_detected=False,
+                secondary_distraction="None",
                 yawning=False,
                 distracted=False,
+                microsleep_detected=False,
+                head_nod_detected=False,
+                stress_level="Unknown",
                 seatbelt_detected=False,
                 seatbelt_status="Unknown",
                 drowsy_frames=0,
@@ -564,27 +634,40 @@ class InsideMonitor:
         phone_detected = False
         phone_confidence = 0.0
         phone_box = None
+        drinking_detected = False
+        drink_box = None
         if reliable_face and self._phone_detector is not None:
             if self._frame_index % max(self.settings.inside_phone_detection_interval, 1) == 0 or self._last_phone_box is None:
-                phone_detected_now, phone_confidence_now, detected_box = self._detect_phone(frame, (x1, y1, x2, y2))
+                phone_detected_now, phone_confidence_now, detected_box, drink_detected_now, detected_drink_box = self._detect_phone(frame, (x1, y1, x2, y2))
                 self._last_phone_detected = phone_detected_now
                 self._last_phone_confidence = phone_confidence_now
                 self._last_phone_box = detected_box
+                self._last_drinking_detected = drink_detected_now
+                self._last_drinking_box = detected_drink_box
 
             phone_detected = self._last_phone_detected
             phone_confidence = self._last_phone_confidence
             phone_box = self._last_phone_box
+            drink_box = self._last_drinking_box
 
             if phone_detected:
                 self._phone_counter += 1
             else:
                 self._phone_counter = max(self._phone_counter - 1, 0)
+
+            if self._last_drinking_detected:
+                self._drinking_counter += 1
+            else:
+                self._drinking_counter = max(self._drinking_counter - 1, 0)
         else:
             self._phone_counter = max(self._phone_counter - 2, 0)
+            self._drinking_counter = max(self._drinking_counter - 2, 0)
             if not reliable_face:
                 self._last_phone_box = None
                 self._last_phone_detected = False
                 self._last_phone_confidence = 0.0
+                self._last_drinking_detected = False
+                self._last_drinking_box = None
 
         phone_detected = self._phone_counter >= self.settings.phone_consec_frames
         phone_confidence = phone_confidence if phone_detected else 0.0
@@ -593,6 +676,22 @@ class InsideMonitor:
         else:
             self._phone_frames = max(self._phone_frames - 2, 0)
         phone_duration_sec = round(self._phone_frames / 25.0, 1)
+
+        drinking_detected = self._drinking_counter >= 3
+        secondary_distraction = "Drinking / Bottle" if drinking_detected else "None"
+
+        eye_gaze_direction = self._compute_eye_gaze(face_landmarks, head_pose_direction)
+        stress_level = self._compute_stress_level(face_landmarks, width, height, face_width)
+
+        head_nod_detected = reliable_face and head_pose_direction == "Down"
+        microsleep_detected = False
+        if reliable_face and self.settings.microsleep_detection_enabled:
+            if (smoothed_ear < ear_threshold or is_closed == 1.0) and head_nod_detected and self._drowsy_counter >= 6:
+                self._microsleep_counter += 1
+                if self._microsleep_counter >= 3:
+                    microsleep_detected = True
+            else:
+                self._microsleep_counter = max(self._microsleep_counter - 1, 0)
 
         yawning = self._yawn_counter >= self.settings.yawn_consec_frames
         distracted = self._distraction_counter >= self.settings.distraction_consec_frames or (
@@ -634,6 +733,10 @@ class InsideMonitor:
                 confidence_note = "Face too small for reliable fatigue analysis"
             else:
                 confidence_note = "Face angle is too extreme for stable classification"
+        elif microsleep_detected:
+            status = "Microsleep"
+            color = (0, 0, 255)
+            confidence_note = f"Critical microsleep: eye closure EAR {smoothed_ear:.2f} with downward head nod"
         elif drowsy and yawning:
             status = "Fatigue Risk"
             color = (0, 0, 255)
@@ -646,6 +749,10 @@ class InsideMonitor:
             status = "Phone Use"
             color = (180, 0, 255)
             confidence_note = f"Handheld phone likely visible near driver ({phone_confidence:.2f})"
+        elif drinking_detected:
+            status = "Distracted (Drinking)"
+            color = (255, 140, 0)
+            confidence_note = "Beverage container detected in hand near steering/face zone"
         elif distracted:
             status = "Distracted"
             color = (0, 165, 255)
@@ -817,11 +924,17 @@ class InsideMonitor:
             perclos=round(perclos, 1),
             attention_score=round(attention_score, 3),
             head_pose_direction=head_pose_direction,
+            eye_gaze_direction=eye_gaze_direction,
             phone_detected=phone_detected,
             phone_confidence=round(phone_confidence, 3),
             phone_duration_sec=phone_duration_sec,
+            drinking_detected=drinking_detected,
+            secondary_distraction=secondary_distraction,
             yawning=yawning,
             distracted=distracted,
+            microsleep_detected=microsleep_detected,
+            head_nod_detected=head_nod_detected,
+            stress_level=stress_level,
             seatbelt_detected=seatbelt_detected,
             seatbelt_status=seatbelt_status,
             drowsy_frames=self._drowsy_counter,

@@ -4,7 +4,7 @@ import asyncio
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -60,9 +60,28 @@ async def incidents_page() -> FileResponse:
     return FileResponse(static_dir / "incidents.html")
 
 
+@app.get("/analytics")
+async def analytics_page() -> FileResponse:
+    return FileResponse(static_dir / "analytics.html")
+
+
 @app.get("/mobile")
 async def mobile_page() -> FileResponse:
     return FileResponse(static_dir / "mobile" / "index.html")
+
+
+@app.websocket("/ws/monitoring")
+async def websocket_monitoring(websocket: WebSocket):
+    await websocket.accept()
+    try:
+        while True:
+            payload = service.get_monitoring_snapshot()
+            await websocket.send_json(payload)
+            await asyncio.sleep(0.2)
+    except (WebSocketDisconnect, asyncio.CancelledError):
+        pass
+    except Exception:
+        pass
 
 
 @app.get("/api/state")
@@ -123,6 +142,19 @@ async def export_events_csv(
         media_type="text/csv",
         headers={"Content-Disposition": "attachment; filename=incidents_export.csv"},
     )
+
+
+@app.post("/api/events/{event_id}/acknowledge")
+async def acknowledge_event(event_id: int) -> JSONResponse:
+    success = service.acknowledge_event(event_id)
+    if not success:
+        return JSONResponse({"error": "Event not found or already acknowledged"}, status_code=404)
+    return JSONResponse({"message": "Event acknowledged successfully", "event_id": event_id})
+
+
+@app.get("/api/analytics")
+async def get_analytics() -> JSONResponse:
+    return JSONResponse(service.get_analytics())
 
 
 @app.post("/api/upload/{stream_name}")

@@ -40,6 +40,10 @@ const perclosValue = document.getElementById("perclosValue");
 const speedEstimateValue = document.getElementById("speedEstimateValue");
 const aggressiveRiskValue = document.getElementById("aggressiveRiskValue");
 const aggressiveRiskNote = document.getElementById("aggressiveRiskNote");
+const ttcValue = document.getElementById("ttcValue");
+const ttcNote = document.getElementById("ttcNote");
+const envWeatherValue = document.getElementById("envWeatherValue");
+const trafficSignalValue = document.getElementById("trafficSignalValue");
 const voiceToggleBtn = document.getElementById("voiceToggleBtn");
 
 let voiceEnabled = true;
@@ -298,13 +302,21 @@ function renderStreamHealth(input, inside, outside) {
   setHealthIndicator(outsideHealth, outsideStatus);
 }
 
-async function fetchState() {
-  const response = await fetch("/api/state");
-  const data = await response.json();
+let monitoringSocket = null;
+let lastWsMessageTime = 0;
+
+function applyStateData(data) {
+  if (!data || !data.fused || !data.inside || !data.outside) return;
 
   // Spoken voice warnings (P2-FR09)
   if (data.input.enabled) {
-    if (data.fused.level === "Critical") {
+    if (data.outside.vru_risk) {
+      speakAlert("Warning: Vulnerable road user detected in vehicle path");
+    } else if (data.outside.ttc_warning && Number(data.outside.ttc_seconds || 0) > 0) {
+      speakAlert(`Collision alert: Time to collision is ${Number(data.outside.ttc_seconds).toFixed(1)} seconds`);
+    } else if (data.inside.microsleep_detected) {
+      speakAlert("Critical Warning: Microsleep episode detected! Wake up!");
+    } else if (data.fused.level === "Critical") {
       const topReason = (data.fused.reasons && data.fused.reasons[0]) || "Critical collision or fatigue danger detected";
       speakAlert(`Critical Warning: ${topReason}`);
     } else if (data.fused.level === "High") {
@@ -378,7 +390,13 @@ async function fetchState() {
   }
 
   if (speedEstimateValue) {
-    speedEstimateValue.textContent = data.outside.relative_speed_estimate || "Stable";
+    if (data.outside.overspeed_detected) {
+      speedEstimateValue.innerHTML = `<span style="color:#ef4444; font-weight:700;">${Number(data.outside.estimated_speed_kmh || 0).toFixed(0)} km/h (OVERSPEED)</span>`;
+    } else if (Number(data.outside.estimated_speed_kmh || 0) > 0) {
+      speedEstimateValue.textContent = `${Number(data.outside.estimated_speed_kmh).toFixed(0)} km/h • ${data.outside.relative_speed_estimate || "Stable"}`;
+    } else {
+      speedEstimateValue.textContent = data.outside.relative_speed_estimate || "Stable";
+    }
   }
 
   if (aggressiveRiskValue) {
@@ -392,12 +410,76 @@ async function fetchState() {
     }
   }
 
+  if (ttcValue) {
+    if (data.outside.ttc_warning && Number(data.outside.ttc_seconds || 0) > 0) {
+      ttcValue.innerHTML = `<span style="color:#ef4444; font-weight:700;">${Number(data.outside.ttc_seconds).toFixed(1)}s (CRITICAL)</span>`;
+    } else if (Number(data.outside.ttc_seconds || 0) > 0) {
+      ttcValue.textContent = `${Number(data.outside.ttc_seconds).toFixed(1)}s`;
+    } else {
+      ttcValue.textContent = "Safe";
+    }
+  }
+
+  if (ttcNote) {
+    const vruLabel = data.outside.vru_risk
+      ? `🚨 VRU Risk (${data.outside.pedestrian_count || 0} Peds, ${data.outside.cyclist_count || 0} Bikes)`
+      : `VRU: ${data.outside.pedestrian_count || 0} Ped, ${data.outside.cyclist_count || 0} Bike`;
+    ttcNote.textContent = vruLabel;
+    ttcNote.style.color = data.outside.vru_risk ? "#ef4444" : "#94a3b8";
+  }
+
+  if (envWeatherValue) {
+    envWeatherValue.textContent = data.outside.weather_condition || "Clear Daylight";
+  }
+
+  if (trafficSignalValue) {
+    const sig = data.outside.traffic_signal && data.outside.traffic_signal !== "NONE" ? data.outside.traffic_signal : "None";
+    const stress = data.inside.stress_level || "Normal";
+    trafficSignalValue.textContent = `Signal: ${sig} • Stress: ${stress}`;
+  }
+
   vehicleCount.textContent = data.outside.vehicle_count;
   trafficLevel.textContent = `${data.outside.traffic_level} traffic | close ${data.outside.close_vehicle_count || 0}`;
   fpsValue.textContent = `${Number(data.inside_fps).toFixed(1)} / ${Number(data.outside_fps).toFixed(1)}`;
   renderReasons(data.fused.reasons);
   renderPlayback(data.playback, data.input.mode);
   renderStreamHealth(data.input, data.inside, data.outside);
+}
+
+async function fetchState() {
+  if (Date.now() - lastWsMessageTime < 3000) {
+    return;
+  }
+  const response = await fetch("/api/state");
+  const data = await response.json();
+  applyStateData(data);
+}
+
+function initMonitoringWebSocket() {
+  const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+  const wsUrl = `${protocol}//${window.location.host}/ws/monitoring`;
+  try {
+    monitoringSocket = new WebSocket(wsUrl);
+    monitoringSocket.onmessage = (event) => {
+      try {
+        const payload = JSON.parse(event.data);
+        if (payload && payload.raw_state) {
+          lastWsMessageTime = Date.now();
+          applyStateData(payload.raw_state);
+        }
+      } catch (err) {
+        console.warn("WebSocket parse error", err);
+      }
+    };
+    monitoringSocket.onclose = () => {
+      setTimeout(initMonitoringWebSocket, 3000);
+    };
+    monitoringSocket.onerror = () => {
+      try { monitoringSocket.close(); } catch (e) {}
+    };
+  } catch (err) {
+    console.warn("WebSocket init error", err);
+  }
 }
 
 async function fetchInputConfig() {
@@ -619,4 +701,5 @@ outsideSourceInput.addEventListener("input", () => {
 });
 
 refresh();
+initMonitoringWebSocket();
 setInterval(refresh, 1500);

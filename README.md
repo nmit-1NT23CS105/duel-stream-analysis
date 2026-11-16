@@ -1,4 +1,16 @@
-# Phase 1: Dual-Stream Dangerous Driving Detection
+---
+title: Dual-Stream Dangerous Driving Detection Hub
+emoji: 🛡️
+colorFrom: blue
+colorTo: indigo
+sdk: gradio
+sdk_version: 4.44.0
+app_file: app.py
+pinned: false
+license: mit
+---
+
+# Dual-Stream Dangerous Driving Detection System
 
 This project implements Phase 1 of a real-time dangerous driving detection system using:
 

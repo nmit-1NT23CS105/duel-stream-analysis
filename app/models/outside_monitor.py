@@ -13,11 +13,19 @@ from app.core.state import OutsideState
 
 
 VEHICLE_CLASS_IDS = {2, 3, 5, 7}
-VEHICLE_CLASS_NAMES = {
+VRU_CLASS_IDS = {0, 1}
+SIGNAL_CLASS_IDS = {9, 11}
+ALL_OUTSIDE_CLASS_IDS = VEHICLE_CLASS_IDS | VRU_CLASS_IDS | SIGNAL_CLASS_IDS
+
+CLASS_NAMES = {
+    0: "Pedestrian",
+    1: "Cyclist",
     2: "Car",
     3: "Bike",
     5: "Bus",
     7: "Truck",
+    9: "Traffic Light",
+    11: "Stop Sign",
 }
 
 
@@ -235,13 +243,22 @@ class OutsideMonitor:
             state = OutsideState(
                 available=False,
                 vehicle_count=0,
+                pedestrian_count=0,
+                cyclist_count=0,
+                vru_risk=False,
                 tracked_count=0,
                 close_vehicle=False,
+                ttc_seconds=0.0,
+                ttc_warning=False,
+                traffic_signal="NONE",
+                stop_sign_detected=False,
+                weather_condition="Clear Daylight",
                 traffic_level="Unknown",
                 confidence_note=note,
             )
             return OutsideResult(state=state, frame=annotated)
 
+        classes_to_track = list(ALL_OUTSIDE_CLASS_IDS) if (self.settings.vru_detection_enabled or self.settings.traffic_signals_enabled) else list(VEHICLE_CLASS_IDS)
         inference = self.model.track(
             source=annotated,
             conf=self.settings.yolo_confidence,
@@ -252,7 +269,7 @@ class OutsideMonitor:
             device=self.settings.yolo_device,
             half=self.settings.yolo_half and self.settings.yolo_device != "cpu",
             verbose=False,
-            classes=list(VEHICLE_CLASS_IDS),
+            classes=classes_to_track,
         )
 
         result = inference[0]
@@ -282,6 +299,26 @@ class OutsideMonitor:
         max_approach_rate = 0.0
         class_counts: dict[str, int] = {}
         proximity_score = 0.0
+        pedestrian_count = 0
+        cyclist_count = 0
+        vru_risk = False
+        traffic_signal = "NONE"
+        stop_sign_detected = False
+        min_ttc = 99.0
+
+        # Environmental Visibility & Weather Assessment
+        gray_env = cv2.cvtColor(annotated, cv2.COLOR_BGR2GRAY)
+        mean_lum = float(np.mean(gray_env))
+        lap_var = float(cv2.Laplacian(gray_env, cv2.CV_64F).var())
+        if mean_lum < 42.0:
+            weather_condition = "Night / Low Light"
+        elif lap_var < 52.0 and mean_lum < 160.0:
+            weather_condition = "Fog / Low Visibility"
+        elif mean_lum > 225.0:
+            weather_condition = "High Sun Glare"
+        else:
+            weather_condition = "Clear Daylight"
+
         edge_margin_x = int(width * self.settings.edge_ignore_ratio)
         edge_margin_y = int(height * self.settings.edge_ignore_ratio)
         frame_area = max(width * height, 1)
@@ -293,10 +330,57 @@ class OutsideMonitor:
             xyxy_values = boxes.xyxy.int().cpu().tolist() if boxes.xyxy is not None else []
 
             for track_id, cls_id, confidence, (x1, y1, x2, y2) in zip(track_ids, class_ids, confidences, xyxy_values):
+                box_area = max((x2 - x1), 0) * max((y2 - y1), 0)
+                cx = (x1 + x2) // 2
+                cy = (y1 + y2) // 2
+
+                # Vulnerable Road Users (Pedestrians & Cyclists)
+                if cls_id in VRU_CLASS_IDS:
+                    if box_area < 350:
+                        continue
+                    if cls_id == 0:
+                        pedestrian_count += 1
+                        label = "Pedestrian"
+                    else:
+                        cyclist_count += 1
+                        label = "Cyclist"
+                    in_close_corridor = (close_zone[0] - 50 <= cx <= close_zone[2] + 50) and (cy >= int(height * 0.40))
+                    if in_close_corridor:
+                        vru_risk = True
+                    vru_color = (0, 0, 255) if in_close_corridor else (255, 0, 255)
+                    cv2.rectangle(annotated, (x1, y1), (x2, y2), vru_color, 2)
+                    cv2.putText(annotated, f"{label} {confidence:.2f}", (x1, max(y1 - 6, 18)), cv2.FONT_HERSHEY_SIMPLEX, 0.55, vru_color, 2)
+                    continue
+
+                # Traffic Signals & Stop Signs
+                if cls_id in SIGNAL_CLASS_IDS:
+                    if cls_id == 9:
+                        tx1, ty1, tx2, ty2 = max(x1, 0), max(y1, 0), min(x2, width), min(y2, height)
+                        light_crop = frame[ty1:ty2, tx1:tx2]
+                        if light_crop.size > 20:
+                            hsv = cv2.cvtColor(light_crop, cv2.COLOR_BGR2HSV)
+                            mask_r = ((hsv[:,:,0] < 10) | (hsv[:,:,0] > 165)) & (hsv[:,:,1] > 70) & (hsv[:,:,2] > 80)
+                            mask_g = (hsv[:,:,0] >= 35) & (hsv[:,:,0] <= 85) & (hsv[:,:,1] > 70) & (hsv[:,:,2] > 80)
+                            mask_y = (hsv[:,:,0] >= 15) & (hsv[:,:,0] <= 32) & (hsv[:,:,1] > 70) & (hsv[:,:,2] > 80)
+                            r_cnt, g_cnt, y_cnt = int(np.sum(mask_r)), int(np.sum(mask_g)), int(np.sum(mask_y))
+                            if r_cnt > 12 and r_cnt >= g_cnt:
+                                traffic_signal = "RED"
+                            elif g_cnt > 12 and g_cnt >= r_cnt:
+                                traffic_signal = "GREEN"
+                            elif y_cnt > 10:
+                                traffic_signal = "YELLOW"
+                        sig_color = (0, 0, 255) if traffic_signal == "RED" else ((0, 255, 0) if traffic_signal == "GREEN" else (0, 255, 255))
+                        cv2.rectangle(annotated, (x1, y1), (x2, y2), sig_color, 2)
+                        cv2.putText(annotated, f"Signal: {traffic_signal}", (x1, max(y1 - 6, 18)), cv2.FONT_HERSHEY_SIMPLEX, 0.55, sig_color, 2)
+                    elif cls_id == 11:
+                        stop_sign_detected = True
+                        cv2.rectangle(annotated, (x1, y1), (x2, y2), (0, 0, 255), 2)
+                        cv2.putText(annotated, "STOP SIGN", (x1, max(y1 - 6, 18)), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 0, 255), 2)
+                    continue
+
                 if cls_id not in VEHICLE_CLASS_IDS:
                     continue
 
-                box_area = max((x2 - x1), 0) * max((y2 - y1), 0)
                 if box_area < self.settings.min_vehicle_box_area:
                     continue
 
@@ -322,10 +406,8 @@ class OutsideMonitor:
                     continue
 
                 active_ids.add(track_id if track_id is not None else len(active_ids) + 1)
-                cx = (x1 + x2) // 2
-                cy = (y1 + y2) // 2
                 in_zone = close_zone[0] <= cx <= close_zone[2] and close_zone[1] <= cy <= close_zone[3]
-                label = VEHICLE_CLASS_NAMES.get(cls_id, "Vehicle")
+                label = CLASS_NAMES.get(cls_id, "Vehicle")
                 class_counts[label] = class_counts.get(label, 0) + 1
                 proximity_score = max(proximity_score, area_ratio)
                 bottom_anchor = y2 >= int(height * 0.62)
@@ -344,6 +426,11 @@ class OutsideMonitor:
                 if is_rapid_approach:
                     rapid_approach = True
                     max_approach_rate = max(max_approach_rate, approach_rate)
+
+                if in_zone and approach_rate > 0.04:
+                    calculated_ttc = round(1.0 / max(approach_rate, 0.01) * 0.35, 1)
+                    if calculated_ttc < min_ttc:
+                        min_ttc = calculated_ttc
 
                 color = (0, 0, 255) if (close_candidate or is_rapid_approach) else (0, 200, 0)
                 id_text = f"#{track_id}" if track_id is not None else "#?"
@@ -399,7 +486,7 @@ class OutsideMonitor:
         elif sudden_lane_change:
             lane_status = "Sudden Lane Change"
 
-        # Relative speed estimate labeled as vision-based estimate (P2-FR07)
+        # Relative and estimated speed calculations (P2-FR07 / Overspeed)
         speed_delta_kph = int(round(max_approach_rate * 60.0))
         if rapid_approach:
             relative_speed_estimate = f"+{speed_delta_kph} km/h closing (vision-based estimate)"
@@ -408,6 +495,23 @@ class OutsideMonitor:
         else:
             relative_speed_estimate = "Stable (vision-based estimate)"
         speed_estimate_label = "Vision-based estimate"
+
+        base_speed = 50.0 if vehicle_count_now > 0 else 0.0
+        estimated_speed_kmh = round(base_speed + speed_delta_kph, 1) if vehicle_count_now > 0 else 0.0
+        speed_limit_kmh = self.settings.speed_limit_kmh
+        overspeed_detected = bool(vehicle_count_now > 0 and estimated_speed_kmh > speed_limit_kmh and rapid_approach)
+        speed_status = "AVAILABLE" if vehicle_count_now > 0 else "STANDBY"
+
+        # Compute Time-To-Collision (TTC)
+        if min_ttc < 99.0:
+            ttc_seconds = min_ttc
+            ttc_warning = ttc_seconds <= self.settings.ttc_alert_threshold
+        elif rapid_approach:
+            ttc_seconds = 1.8
+            ttc_warning = True
+        else:
+            ttc_seconds = 0.0
+            ttc_warning = False
 
         # Aggressive driving risk calculation (P2-FR08)
         agg_score = 0
@@ -512,9 +616,42 @@ class OutsideMonitor:
             2,
         )
 
+        if vru_risk:
+            cv2.putText(
+                annotated,
+                "VRU ALERT: Pedestrian/Bike Ahead",
+                (20, 260),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.65,
+                (0, 0, 255),
+                2,
+            )
+        if ttc_warning and ttc_seconds > 0:
+            cv2.putText(
+                annotated,
+                f"TTC WARNING: {ttc_seconds:.1f}s",
+                (20, 290),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.65,
+                (0, 0, 255),
+                2,
+            )
+        cv2.putText(
+            annotated,
+            f"Env: {weather_condition}",
+            (20, 320),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.60,
+            (255, 255, 255),
+            2,
+        )
+
         state = OutsideState(
             available=True,
             vehicle_count=vehicle_count_now,
+            pedestrian_count=pedestrian_count,
+            cyclist_count=cyclist_count,
+            vru_risk=vru_risk,
             tracked_count=vehicle_count_now,
             close_vehicle=close_vehicle,
             close_vehicle_count=stable_close_count,
@@ -528,10 +665,19 @@ class OutsideMonitor:
             weaving_detected=weaving_detected,
             rapid_approach=rapid_approach,
             approach_rate=round(max_approach_rate, 3),
+            ttc_seconds=round(ttc_seconds, 1),
+            ttc_warning=ttc_warning,
             relative_speed_estimate=relative_speed_estimate,
             speed_estimate_label=speed_estimate_label,
+            estimated_speed_kmh=estimated_speed_kmh,
+            speed_limit_kmh=speed_limit_kmh,
+            overspeed_detected=overspeed_detected,
+            speed_status=speed_status,
+            traffic_signal=traffic_signal,
+            stop_sign_detected=stop_sign_detected,
+            weather_condition=weather_condition,
             aggressive_driving_score=aggressive_driving_score,
             aggressive_driving_detected=aggressive_driving_detected,
-            confidence_note=f"{class_summary} | Lane {lane_status}",
+            confidence_note=f"{class_summary} | Lane {lane_status} | {weather_condition}",
         )
         return OutsideResult(state=state, frame=annotated)

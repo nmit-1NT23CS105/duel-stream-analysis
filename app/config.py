@@ -128,6 +128,13 @@ class Settings:
     lane_detection_enabled: bool = os.getenv("LANE_DETECTION_ENABLED", "true").lower() == "true"
     lane_drift_threshold: float = float(os.getenv("LANE_DRIFT_THRESHOLD", "0.08"))
     rapid_approach_threshold: float = float(os.getenv("RAPID_APPROACH_THRESHOLD", "0.15"))
+    speed_limit_kmh: float = float(os.getenv("SPEED_LIMIT_KMH", "60.0"))
+    vru_detection_enabled: bool = os.getenv("VRU_DETECTION_ENABLED", "true").lower() == "true"
+    ttc_alert_threshold: float = float(os.getenv("TTC_ALERT_THRESHOLD", "2.2"))
+    traffic_signals_enabled: bool = os.getenv("TRAFFIC_SIGNALS_ENABLED", "true").lower() == "true"
+    microsleep_detection_enabled: bool = os.getenv("MICROSLEEP_DETECTION_ENABLED", "true").lower() == "true"
+    drinking_detection_enabled: bool = os.getenv("DRINKING_DETECTION_ENABLED", "true").lower() == "true"
+    weather_analysis_enabled: bool = os.getenv("WEATHER_ANALYSIS_ENABLED", "true").lower() == "true"
 
     risk_smoothing_window: int = int(os.getenv("RISK_SMOOTHING_WINDOW", "6"))
     critical_persistence_frames: int = int(os.getenv("CRITICAL_PERSISTENCE_FRAMES", "2"))

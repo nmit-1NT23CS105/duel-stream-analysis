@@ -32,6 +32,9 @@ class RiskEngine:
 
         if not inside.available:
             reasons.append("Inside stream unavailable")
+        elif inside.status == "Microsleep" or inside.microsleep_detected:
+            score += 55
+            reasons.append("CRITICAL: Microsleep episode detected with downward head nod")
         elif inside.status == "Fatigue Risk":
             score += 46
             reasons.append(
@@ -46,6 +49,9 @@ class RiskEngine:
         elif inside.status == "Phone Use":
             score += 30
             reasons.append(f"Possible handheld phone usage detected ({inside.phone_confidence:.2f})")
+        elif inside.status == "Distracted (Drinking)" or inside.drinking_detected:
+            score += 22
+            reasons.append("Driver distraction: Beverage container detected near steering zone")
         elif inside.status == "Yawning":
             score += 18
             reasons.append(f"Sustained yawn detected ({inside.mar:.2f})")
@@ -120,6 +126,26 @@ class RiskEngine:
             score += 15
             reasons.append("Driver seatbelt is not fastened")
 
+        if outside.overspeed_detected:
+            score += 18
+            reasons.append(f"Overspeed hazard: {outside.estimated_speed_kmh:.0f} km/h exceeds {outside.speed_limit_kmh:.0f} km/h limit")
+
+        if outside.vru_risk:
+            score += 35
+            reasons.append("CRITICAL: Vulnerable Road User (Pedestrian/Cyclist) in forward travel path")
+
+        if outside.ttc_warning and outside.ttc_seconds > 0:
+            score += 26
+            reasons.append(f"Collision hazard: Time-to-Collision is {outside.ttc_seconds:.1f}s")
+
+        if outside.traffic_signal == "RED" and (outside.close_vehicle or outside.rapid_approach):
+            score += 15
+            reasons.append("Approaching red traffic signal with forward traffic")
+
+        if outside.weather_condition in {"Night / Low Light", "Fog / Low Visibility"}:
+            score += 6
+            reasons.append(f"Adverse weather condition ({outside.weather_condition})")
+
         # Contextual synergy rules
         if outside.rapid_approach and inside.status in {"Drowsy", "Fatigue Risk"}:
             score += 30
@@ -165,18 +191,26 @@ class RiskEngine:
 
         # Determine incident category (P2-FR10)
         categories: list[str] = []
+        if inside.microsleep_detected or inside.status == "Microsleep":
+            categories.append("Microsleep")
         if inside.status in {"Fatigue Risk", "Drowsy", "Yawning"} or inside.perclos >= 25.0:
             categories.append("Fatigue")
         if inside.phone_detected:
             categories.append("Phone Use")
+        if inside.drinking_detected or inside.status == "Distracted (Drinking)":
+            categories.append("Manual Distraction")
         if inside.status == "Distracted" or inside.head_pose_direction in {"Left", "Right", "Down"}:
             categories.append("Distraction")
+        if outside.vru_risk:
+            categories.append("VRU Collision Risk")
         if outside.weaving_detected or outside.sudden_lane_change or outside.aggressive_driving_detected:
             categories.append("Aggressive Driving")
         if outside.lane_status in {"Drifting Left", "Drifting Right"}:
             categories.append("Lane Departure")
-        if outside.close_vehicle or outside.rapid_approach:
+        if outside.close_vehicle or outside.rapid_approach or outside.ttc_warning:
             categories.append("Tailgating / Proximity")
+        if outside.overspeed_detected:
+            categories.append("Overspeeding")
         if inside.available and inside.face_detected and inside.seatbelt_status == "Unfastened":
             categories.append("Seatbelt Violation")
 

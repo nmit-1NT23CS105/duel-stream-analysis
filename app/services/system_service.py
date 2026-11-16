@@ -64,6 +64,88 @@ class DualStreamService:
         with self._lock:
             return self.state.to_dict()
 
+    def get_monitoring_snapshot(self) -> dict:
+        with self._lock:
+            raw = self.state.to_dict()
+            inside = self.state.inside
+            outside = self.state.outside
+            fused = self.state.fused
+            now_iso = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+            
+            alerts = []
+            if fused.level in {"High", "Critical"}:
+                alerts.append({
+                    "type": fused.category,
+                    "severity": fused.level.upper(),
+                    "message": fused.reasons[0] if fused.reasons else "Elevated risk condition detected",
+                    "score": fused.score,
+                    "timestamp": now_iso,
+                })
+            
+            return {
+                "type": "monitoring_update",
+                "timestamp": now_iso,
+                "driver": {
+                    "state": inside.status.upper(),
+                    "available": inside.available,
+                    "face_detected": inside.face_detected,
+                    "eye_state": "CLOSED" if inside.ear < self.settings.ear_threshold else "OPEN",
+                    "head_orientation": inside.head_pose_direction.upper(),
+                    "eye_gaze": inside.eye_gaze_direction.upper(),
+                    "microsleep": inside.microsleep_detected,
+                    "drinking": inside.drinking_detected,
+                    "stress_level": inside.stress_level.upper(),
+                    "yawning": inside.yawning,
+                    "phone_detected": inside.phone_detected,
+                    "phone_duration_sec": round(inside.phone_duration_sec, 1),
+                    "seatbelt_status": inside.seatbelt_status,
+                    "ear": round(inside.ear, 3),
+                    "mar": round(inside.mar, 3),
+                    "perclos": round(inside.perclos, 1),
+                    "attention_score": round(inside.attention_score, 2),
+                },
+                "road": {
+                    "available": outside.available,
+                    "vehicle_count": outside.vehicle_count,
+                    "pedestrian_count": outside.pedestrian_count,
+                    "cyclist_count": outside.cyclist_count,
+                    "vru_risk": outside.vru_risk,
+                    "traffic_density": outside.traffic_level.upper(),
+                    "lane_status": outside.lane_status.upper(),
+                    "speed_status": outside.speed_status,
+                    "estimated_speed_kmh": outside.estimated_speed_kmh,
+                    "speed_limit_kmh": outside.speed_limit_kmh,
+                    "overspeed": outside.overspeed_detected,
+                    "close_vehicle": outside.close_vehicle,
+                    "rapid_approach": outside.rapid_approach,
+                    "ttc_seconds": outside.ttc_seconds,
+                    "ttc_warning": outside.ttc_warning,
+                    "traffic_signal": outside.traffic_signal,
+                    "stop_sign": outside.stop_sign_detected,
+                    "weather": outside.weather_condition,
+                    "weaving": outside.weaving_detected,
+                },
+                "risk": {
+                    "score": fused.score,
+                    "level": fused.level.upper(),
+                    "category": fused.category,
+                    "confidence": fused.confidence,
+                    "reasons": fused.reasons,
+                },
+                "fps": {
+                    "inside": self.state.inside_fps,
+                    "outside": self.state.outside_fps,
+                },
+                "alerts": alerts,
+                "raw_state": raw,
+            }
+
+    def acknowledge_event(self, event_id: int) -> bool:
+        return self._event_store.acknowledge_event(event_id)
+
+    def get_analytics(self) -> dict:
+        return self._event_store.get_analytics_summary()
+
     def get_recent_events(
         self,
         limit: int = 10,

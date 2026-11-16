@@ -22,6 +22,7 @@
         <div class="hero-actions">
           <nav class="page-nav" aria-label="Page navigation">
             <a class="nav-link active" href="/">Dashboard</a>
+            <a class="nav-link" href="/analytics">Analytics</a>
             <a class="nav-link" href="/incidents">Incidents</a>
             <a class="nav-link" href="/mobile" target="_blank" title="Open Mobile In-Car Companion">📱 Mobile</a>
           </nav>
@@ -139,6 +140,18 @@
               <span class="panel-label">Aggressive Risk</span>
               <strong id="aggressiveRiskValue">0 / 100</strong>
               <small id="aggressiveRiskNote">Weaving / maneuvers</small>
+            </article>
+
+            <article class="panel metric-card">
+              <span class="panel-label">Collision TTC</span>
+              <strong id="ttcValue">Safe</strong>
+              <small id="ttcNote">Time-to-Collision &bull; VRU Clear</small>
+            </article>
+
+            <article class="panel metric-card">
+              <span class="panel-label">Environment</span>
+              <strong id="envWeatherValue">Clear Daylight</strong>
+              <small id="trafficSignalValue">Signal: None &bull; Stress: Normal</small>
             </article>
 
             <article class="panel metric-card">

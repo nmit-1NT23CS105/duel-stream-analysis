@@ -59,6 +59,9 @@ function renderIncidents(events) {
 
     const categoryText = event.category || "General Safety";
     const confidencePct = Number(event.confidence || 1.0).toFixed(2);
+    const ackStatusHtml = event.acknowledged
+      ? '<span class="pill low" style="margin-top:4px; font-size:11px;">✓ Acknowledged</span>'
+      : `<button class="ack-btn pill" data-id="${event.id}" style="margin-top:4px; font-size:11px; cursor:pointer; background:#2563eb; color:white; border:none; padding:3px 8px;" title="Mark incident as reviewed">Acknowledge</button>`;
 
     card.innerHTML = `
       <div class="incident-card-top">
@@ -66,9 +69,12 @@ function renderIncidents(events) {
           <span class="panel-label">Incident #${event.id} &bull; ${categoryText}</span>
           <h2>${timeLabel}</h2>
         </div>
-        <div class="incident-card-score">
-          <span class="${severityClass(event.risk_level)}">${event.risk_level}</span>
-          <strong>${event.risk_score}</strong>
+        <div class="incident-card-score" style="display:flex; flex-direction:column; align-items:flex-end;">
+          <div style="display:flex; align-items:center; gap:6px;">
+            <span class="${severityClass(event.risk_level)}">${event.risk_level}</span>
+            <strong>${event.risk_score}</strong>
+          </div>
+          ${ackStatusHtml}
         </div>
       </div>
       <div class="incident-summary-grid">
@@ -165,5 +171,29 @@ if (categoryFilter) {
 limitFilter.addEventListener("change", () => {
   fetchIncidents().catch((error) => console.error("Incident refresh failed", error));
 });
+
+if (incidentGrid) {
+  incidentGrid.addEventListener("click", async (e) => {
+    const btn = e.target.closest(".ack-btn");
+    if (!btn) return;
+    const eventId = btn.getAttribute("data-id");
+    if (!eventId) return;
+    btn.disabled = true;
+    btn.textContent = "Saving...";
+    try {
+      const res = await fetch(`/api/events/${eventId}/acknowledge`, { method: "POST" });
+      if (res.ok) {
+        btn.outerHTML = '<span class="pill low" style="margin-top:4px; font-size:11px;">✓ Acknowledged</span>';
+      } else {
+        btn.textContent = "Retry";
+        btn.disabled = false;
+      }
+    } catch (err) {
+      console.error("Ack error", err);
+      btn.textContent = "Retry";
+      btn.disabled = false;
+    }
+  });
+}
 
 fetchIncidents().catch((error) => console.error("Incident refresh failed", error));

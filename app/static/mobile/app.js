@@ -479,7 +479,13 @@ async function fetchState() {
 
     // Metric 9: Relative Speed
     if (speedEstimateValue) {
-      speedEstimateValue.textContent = data.outside.relative_speed_estimate || "Stable";
+      if (data.outside.overspeed_detected) {
+        speedEstimateValue.innerHTML = `<span style="color:#ef4444; font-weight:700;">${Number(data.outside.estimated_speed_kmh || 0).toFixed(0)} km/h (OVERSPEED)</span>`;
+      } else if (Number(data.outside.estimated_speed_kmh || 0) > 0) {
+        speedEstimateValue.textContent = `${Number(data.outside.estimated_speed_kmh).toFixed(0)} km/h • ${data.outside.relative_speed_estimate || "Stable"}`;
+      } else {
+        speedEstimateValue.textContent = data.outside.relative_speed_estimate || "Stable";
+      }
     }
 
     // Metric 10: Aggressive Risk

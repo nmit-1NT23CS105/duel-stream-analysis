@@ -100,7 +100,8 @@ class EventStore:
                 outside_traffic,
                 reasons_json,
                 inside_snapshot,
-                outside_snapshot
+                outside_snapshot,
+                acknowledged
             FROM events
             {where_sql}
             ORDER BY id DESC
@@ -129,7 +130,8 @@ class EventStore:
                     outside_traffic TEXT NOT NULL,
                     reasons_json TEXT NOT NULL,
                     inside_snapshot TEXT,
-                    outside_snapshot TEXT
+                    outside_snapshot TEXT,
+                    acknowledged INTEGER NOT NULL DEFAULT 0
                 )
                 """
             )
@@ -139,6 +141,8 @@ class EventStore:
                 conn.execute("ALTER TABLE events ADD COLUMN category TEXT NOT NULL DEFAULT 'Normal Driving'")
             if "confidence" not in existing_cols:
                 conn.execute("ALTER TABLE events ADD COLUMN confidence REAL NOT NULL DEFAULT 1.0")
+            if "acknowledged" not in existing_cols:
+                conn.execute("ALTER TABLE events ADD COLUMN acknowledged INTEGER NOT NULL DEFAULT 0")
             conn.commit()
 
     def _insert_event(
@@ -244,9 +248,77 @@ class EventStore:
             "inside_status": row["inside_status"],
             "outside_traffic": row["outside_traffic"],
             "reasons": reasons,
+            "acknowledged": bool(row["acknowledged"]) if "acknowledged" in row_keys else False,
             "inside_snapshot_url": self._snapshot_url(inside_snapshot),
             "outside_snapshot_url": self._snapshot_url(outside_snapshot),
         }
+
+    def acknowledge_event(self, event_id: int) -> bool:
+        with sqlite3.connect(self.settings.db_path) as conn:
+            cursor = conn.execute("UPDATE events SET acknowledged = 1 WHERE id = ?", (int(event_id),))
+            conn.commit()
+            return cursor.rowcount > 0
+
+    def get_analytics_summary(self) -> dict:
+        with sqlite3.connect(self.settings.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            total_events = conn.execute("SELECT COUNT(*) AS c FROM events").fetchone()["c"]
+
+            level_rows = conn.execute(
+                "SELECT risk_level, COUNT(*) AS count FROM events GROUP BY risk_level"
+            ).fetchall()
+            risk_levels = {row["risk_level"]: row["count"] for row in level_rows}
+
+            cat_rows = conn.execute(
+                "SELECT category, COUNT(*) AS count FROM events GROUP BY category ORDER BY count DESC LIMIT 8"
+            ).fetchall()
+            categories = [{"category": row["category"], "count": row["count"]} for row in cat_rows]
+
+            drv_rows = conn.execute(
+                "SELECT inside_status, COUNT(*) AS count FROM events GROUP BY inside_status ORDER BY count DESC LIMIT 6"
+            ).fetchall()
+            driver_states = [{"status": row["inside_status"], "count": row["count"]} for row in drv_rows]
+
+            trf_rows = conn.execute(
+                "SELECT outside_traffic, COUNT(*) AS count FROM events GROUP BY outside_traffic ORDER BY count DESC"
+            ).fetchall()
+            traffic_levels = [{"traffic": row["outside_traffic"], "count": row["count"]} for row in trf_rows]
+
+            trend_rows = conn.execute(
+                "SELECT id, created_at, risk_score, risk_level, category FROM events ORDER BY id DESC LIMIT 30"
+            ).fetchall()
+            trend = [
+                {
+                    "id": row["id"],
+                    "time": row["created_at"].split("T")[-1] if "T" in row["created_at"] else row["created_at"],
+                    "score": row["risk_score"],
+                    "level": row["risk_level"],
+                    "category": row["category"],
+                }
+                for row in reversed(trend_rows)
+            ]
+
+            ack_row = conn.execute("SELECT COUNT(*) AS c FROM events WHERE acknowledged = 1").fetchone()
+            ack_count = ack_row["c"] if ack_row else 0
+
+            avg_row = conn.execute("SELECT AVG(risk_score) AS a FROM events").fetchone()
+            avg_score = round(float(avg_row["a"]), 1) if avg_row and avg_row["a"] is not None else 0.0
+
+            return {
+                "total_events": total_events,
+                "critical_count": risk_levels.get("Critical", 0),
+                "high_count": risk_levels.get("High", 0),
+                "medium_count": risk_levels.get("Medium", 0),
+                "low_count": risk_levels.get("Low", 0),
+                "acknowledged_count": ack_count,
+                "unacknowledged_count": max(0, total_events - ack_count),
+                "average_risk_score": avg_score,
+                "risk_levels": risk_levels,
+                "categories": categories,
+                "driver_states": driver_states,
+                "traffic_levels": traffic_levels,
+                "score_trend": trend,
+            }
 
     def export_csv(
         self,
@@ -266,6 +338,7 @@ class EventStore:
             "Confidence",
             "Inside Status",
             "Outside Traffic",
+            "Acknowledged",
             "Reasons",
         ])
         for event in events:
@@ -278,6 +351,7 @@ class EventStore:
                 event.get("confidence", 1.0),
                 event["inside_status"],
                 event["outside_traffic"],
+                "Yes" if event.get("acknowledged") else "No",
                 " | ".join(event.get("reasons", [])),
             ])
         return output.getvalue()

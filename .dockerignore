@@ -1,0 +1,14 @@
+.venv
+.git
+.gemini
+__pycache__
+*.pyc
+*.pyo
+.pytest_cache
+data/uploads/*
+data/events/*
+.env
+bin/
+*.docx
+*.pdf
+test_system_integrity.py
