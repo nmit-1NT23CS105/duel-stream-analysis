@@ -6,6 +6,17 @@ import os
 import uvicorn
 from app.main import app
 
+# Hugging Face ZeroGPU compatibility
+try:
+    import spaces
+
+    @spaces.GPU(duration=60)
+    def zero_gpu_pipeline():
+        """Keep Hugging Face ZeroGPU allocator active."""
+        return True
+except Exception:
+    pass
+
 try:
     import gradio as gr
     demo = gr.Blocks(title="Dual-Stream Driving Safety Hub")
