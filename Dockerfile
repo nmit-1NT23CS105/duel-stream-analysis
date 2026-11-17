@@ -3,7 +3,7 @@ FROM python:3.11-slim
 ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
-    YOLO_CONFIG_DIR=/home/user/app/data/ultralytics
+    YOLO_CONFIG_DIR=/tmp/ultralytics
 
 # Install system libraries required by OpenCV, MediaPipe, and YOLO
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -24,8 +24,8 @@ ENV HOME=/home/appuser \
 
 WORKDIR /home/appuser/app
 
-# Install lightweight PyTorch CPU wheel first for ultra-fast build
-RUN pip install --no-cache-dir --user torch torchvision --index-url https://download.pytorch.org/whl/cpu
+# Install lightweight PyTorch CPU wheel + compatible numpy first
+RUN pip install --no-cache-dir --user "numpy==1.26.4" torch torchvision --index-url https://download.pytorch.org/whl/cpu
 
 # Copy requirements and install remaining python packages
 COPY --chown=appuser:appuser requirements.txt .
@@ -35,7 +35,7 @@ RUN pip install --no-cache-dir --user -r requirements.txt
 COPY --chown=appuser:appuser . .
 
 # Ensure data directories exist and pre-cache YOLO weights for instant startup
-RUN mkdir -p data/uploads data/events data/ultralytics && \
+RUN mkdir -p /tmp/ultralytics data/uploads data/events data/ultralytics && \
     python -c "from ultralytics import YOLO; YOLO('yolov8s.pt'); YOLO('yolov8n.pt')"
 
 # Expose server port

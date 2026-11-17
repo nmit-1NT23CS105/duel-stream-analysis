@@ -14,7 +14,11 @@ except Exception:  # pragma: no cover - fallback if torch import fails at startu
 
 load_dotenv()
 workspace_ultralytics_dir = Path(os.getenv("YOLO_CONFIG_DIR", "data/ultralytics"))
-workspace_ultralytics_dir.mkdir(parents=True, exist_ok=True)
+try:
+    workspace_ultralytics_dir.mkdir(parents=True, exist_ok=True)
+except Exception:
+    workspace_ultralytics_dir = Path("/tmp/ultralytics")
+    workspace_ultralytics_dir.mkdir(parents=True, exist_ok=True)
 os.environ["YOLO_CONFIG_DIR"] = str(workspace_ultralytics_dir.resolve())
 
 
